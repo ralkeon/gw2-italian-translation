@@ -2,7 +2,7 @@
 //!
 //! Text Translator starts this exe (module.toml) from inside the game process. It writes the
 //! handshake at once (the game waits for it), then relays frames unchanged:
-//! stdin -> request pipe -> GW2 Italian Translation addon -> reply pipe -> stdout.
+//! stdin -> request pipe -> Italian Translation addon -> reply pipe -> stdout.
 //!
 //! The addon may be missing or reloading: requests that arrive meanwhile are queued and sent once
 //! it is back, so reloading the DLL never needs a module restart.
@@ -124,7 +124,7 @@ fn relay(game_pid: u32, rx: &Receiver<Vec<u8>>) -> ! {
             Ok(pipes) => pipes,
             Err(_) => {
                 if !waiting_logged {
-                    log('w', "GW2 Italian Translation addon not loaded yet, waiting for it");
+                    log('w', "Italian Translation addon not loaded yet, waiting for it");
                     waiting_logged = true;
                 }
                 queue_while_waiting(rx, &mut pending, RETRY);

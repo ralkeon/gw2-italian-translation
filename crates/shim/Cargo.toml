@@ -1,6 +1,6 @@
 [package]
 name = "gw2it-shim"
-description = "Text Translator module that only relays requests to the GW2 Italian Translation addon"
+description = "Text Translator module that only relays requests to the Italian Translation addon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

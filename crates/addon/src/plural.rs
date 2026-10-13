@@ -11,6 +11,9 @@
 //!
 //! Texts with `%num%` are left alone: there the plural depends on a number inside the sentence and
 //! the word order changes.
+//!
+//! Ported from plurale_it.py of NikeGipple's gw2-nexus-local-translator
+//! (MIT License, Copyright (c) 2026 NikeGipple; see LICENSE).
 
 /// The part to pluralize ends at one of these.
 const STOP: &[&str] = &[

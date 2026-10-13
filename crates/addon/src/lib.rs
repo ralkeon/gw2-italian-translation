@@ -1,4 +1,4 @@
-//! GW2 Italian Translation: Nexus addon.
+//! Italian Translation: Nexus addon.
 //!
 //! Text Translator (Ideka) hooks the game text and hands it to a "module" process. Our module is
 //! the shim (gw2it_shim.exe), which only relays the requests to this DLL over named pipes. All the
@@ -24,10 +24,10 @@ use nexus::{
     paths::get_addon_dir,
 };
 
-pub(crate) const ADDON_DIR: &str = "gw2_italian_translation";
+pub(crate) const ADDON_DIR: &str = "italian_translation";
 
 nexus::export! {
-    name: "GW2 Italian Translation",
+    name: "Italian Translation",
     signature: -0x4732_4954, // "G2IT", negative: not on Raidcore
     load,
     unload,

@@ -1,12 +1,12 @@
 [package]
 name = "gw2it-addon"
-description = "GW2 Italian Translation: Nexus addon that translates the game text through Text Translator"
+description = "Italian Translation: Nexus addon that translates the game text through Text Translator"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "gw2_italian_translation"
+name = "italian_translation"
 crate-type = ["cdylib"]
 
 [dependencies]

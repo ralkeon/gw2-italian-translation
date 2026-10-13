@@ -1,3 +1,3 @@
-name = "GW2 Italian Translation"
+name = "Italian Translation"
 command = "gw2it_shim.exe"
 args = ["--cache-key", "gw2it-dev", "--result-version", "1"]

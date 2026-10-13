@@ -227,7 +227,7 @@ static MAP_ON: AtomicBool = AtomicBool::new(false);
 
 /// Author of the hand corrections that do not name one ('editor', 'external').
 fn map_author() -> String {
-    config::contributor().unwrap_or_else(|| "gw2_italian_translation".into())
+    config::contributor().unwrap_or_else(|| "italian_translation".into())
 }
 
 fn open_map(con: &Connection, path: &Path) -> rusqlite::Result<()> {

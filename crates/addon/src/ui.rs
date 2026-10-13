@@ -75,7 +75,7 @@ pub fn render(ui: &Ui) {
         return;
     };
     let state = state.get_or_insert_with(State::new);
-    Window::new("GW2 Italian Translation").opened(&mut open).size([700.0, 600.0], nexus::imgui::Condition::FirstUseEver).build(ui, || {
+    Window::new("Italian Translation").opened(&mut open).size([700.0, 600.0], nexus::imgui::Condition::FirstUseEver).build(ui, || {
         status(ui);
         if ui.collapsing_header("Chiavi API", TreeNodeFlags::empty()) {
             keys(ui, state);
@@ -93,7 +93,7 @@ fn status(ui: &Ui) {
     if SHARED.shim_connected.load(Ordering::Relaxed) {
         ui.text_colored([0.4, 0.9, 0.4, 1.0], "Text Translator collegato");
     } else {
-        ui.text_colored([0.9, 0.6, 0.3, 1.0], "In attesa di Text Translator (modulo GW2 Italian avviato?)");
+        ui.text_colored([0.9, 0.6, 0.3, 1.0], "In attesa di Text Translator (modulo Italian Translation avviato?)");
     }
     ui.text(format!(
         "Richieste in questa sessione: {}   Testi in archivio: {}",
