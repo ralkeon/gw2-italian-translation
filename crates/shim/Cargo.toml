@@ -1,0 +1,17 @@
+[package]
+name = "gw2it-shim"
+description = "Text Translator module that only relays requests to the GW2 Italian Translation addon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "gw2it_shim"
+path = "src/main.rs"
+
+[dependencies]
+gw2it-proto.workspace = true
+
+[dependencies.windows-sys]
+workspace = true
+features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"]

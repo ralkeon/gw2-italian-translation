@@ -1,0 +1,31 @@
+[package]
+name = "gw2it-addon"
+description = "GW2 Italian Translation: Nexus addon that translates the game text through Text Translator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "gw2_italian_translation"
+crate-type = ["cdylib"]
+
+[dependencies]
+gw2it-proto.workspace = true
+log.workspace = true
+nexus = { git = "https://github.com/zerthox/nexus-rs", rev = "51bff5ab38ad11332316448b452ece1b773018cd", features = ["log", "log_filter"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+ureq = { version = "3", features = ["json"] }
+
+[dependencies.windows-sys]
+workspace = true
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+]

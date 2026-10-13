@@ -1,0 +1,8 @@
+[package]
+name = "gw2it-proto"
+description = "Text Translator module protocol (modulep v2) codec and the shim <-> addon pipe names"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

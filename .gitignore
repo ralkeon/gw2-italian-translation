@@ -1,0 +1,11 @@
+/target/
+.idea/
+*.stackdump
+
+# Data: game text (ArenaNet's) and personal settings never go on GitHub
+*.db
+*.db-wal
+*.db-shm
+*.db.tmp
+config.toml
+contributor.json
