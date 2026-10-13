@@ -6,6 +6,7 @@
 //!
 //! Every source text is saved in strings.db. A text with a saved translation gets it at once;
 //! the others are translated by DeepL in the background and pushed into the game when ready.
+//! Translations are shared with the other players through a global database (sync.rs).
 
 mod config;
 mod deepl;
@@ -14,6 +15,7 @@ mod pipe;
 mod plural;
 mod state;
 mod store;
+mod sync;
 mod translate;
 mod ui;
 
@@ -52,7 +54,8 @@ fn load() {
 
     config::load(&dir.join("config.toml"));
     config::load_contributor(&dir.join("contributor.json"));
-    let backlog = match store::start(&dir.join("strings.db")) {
+    let db = dir.join("strings.db");
+    let backlog = match store::start(&db) {
         Ok(backlog) => backlog,
         Err(e) => {
             log::error!("cannot open strings.db: {e}");
@@ -64,6 +67,7 @@ fn load() {
     }
     translate::start(backlog);
     pipe::start();
+    sync::start(db);
 
     register_render(RenderType::Render, render!(ui::render)).revert_on_unload();
     register_keybind_with_string(
@@ -83,6 +87,7 @@ fn load() {
 fn unload() {
     // Our threads must be gone before Nexus frees the DLL code they run.
     pipe::stop();
+    sync::stop();
     translate::stop();
     store::stop();
     log::info!("unloaded");

@@ -1,8 +1,11 @@
 //! State shared between the pipe thread, the store thread, the translator and the UI.
 
-use std::sync::{
-    Mutex,
-    atomic::{AtomicBool, AtomicU64},
+use std::{
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU64},
+    },
+    time::Instant,
 };
 
 pub struct Shared {
@@ -21,6 +24,16 @@ pub struct Shared {
     pub status: Mutex<String>,
     /// DeepL characters used and allowed this month.
     pub usage: Mutex<Option<(u64, u64)>>,
+    pub sync: Mutex<Sync>,
+}
+
+/// The global database, in this session.
+pub struct Sync {
+    pub status: String,
+    /// Last sync that worked.
+    pub at: Option<Instant>,
+    pub sent: u64,
+    pub received: u64,
 }
 
 pub static SHARED: Shared = Shared {
@@ -32,4 +45,5 @@ pub static SHARED: Shared = Shared {
     rejected: AtomicU64::new(0),
     status: Mutex::new(String::new()),
     usage: Mutex::new(None),
+    sync: Mutex::new(Sync { status: String::new(), at: None, sent: 0, received: 0 }),
 };

@@ -111,6 +111,19 @@ fn status(ui: &Ui) {
     if let Some((used, limit)) = SHARED.usage.lock().ok().and_then(|u| *u) {
         ui.text(format!("DeepL questo mese: {used} / {limit} caratteri"));
     }
+    if let Ok(sync) = SHARED.sync.lock() {
+        let when = match sync.at {
+            Some(at) if at.elapsed().as_secs() < 60 => ", ultima adesso".to_owned(),
+            Some(at) => format!(", ultima {} min fa", at.elapsed().as_secs() / 60),
+            None => String::new(),
+        };
+        ui.text(format!(
+            "DB globale: {}{when}   Inviate: {}   Ricevute: {}",
+            if sync.status.is_empty() { "in attesa" } else { &sync.status },
+            sync.sent,
+            sync.received,
+        ));
+    }
 }
 
 fn keys(ui: &Ui, state: &mut State) {

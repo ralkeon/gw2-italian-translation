@@ -67,7 +67,7 @@ static REPAIRED: Mutex<Vec<(u32, u64, String)>> = Mutex::new(Vec::new());
 
 const SEARCH_MAX: usize = 200;
 
-const SCHEMA: &str = "
+pub(crate) const SCHEMA: &str = "
     PRAGMA journal_mode = WAL;
     PRAGMA synchronous = NORMAL;
     CREATE TABLE IF NOT EXISTS strings (
@@ -86,7 +86,7 @@ const SCHEMA: &str = "
         hash   INTEGER NOT NULL,      -- hash of the English it translates: a new English is a new row
         it     TEXT    NOT NULL,
         status TEXT    NOT NULL,      -- 'auto' (machine), 'manual' (never overwritten)
-        source TEXT    NOT NULL,      -- 'deepl', 'editor:<contributor>', 'external'
+        source TEXT    NOT NULL,      -- 'deepl', 'editor:<contributor>', 'external', 'cloud:<author>'
         at     INTEGER NOT NULL,      -- unix ms of the last change
         PRIMARY KEY (id, hash)
     ) WITHOUT ROWID;
@@ -504,20 +504,38 @@ impl Watch {
             return Ok(());
         }
         self.version = version;
-        let mut stmt = con.prepare_cached("SELECT id, hash, it, at FROM translations WHERE at > ?1 ORDER BY at")?;
+        // `seen`: the game has shown this text here. Text Translator may hold an older translation
+        // of it, so the new one is sent; the others are answered from memory when asked for.
+        let mut stmt = con.prepare_cached(
+            "SELECT t.id, t.hash, t.it, t.at, t.source,
+                    EXISTS (SELECT 1 FROM strings s WHERE s.id = t.id AND s.hash = t.hash)
+             FROM translations t WHERE t.at > ?1 ORDER BY t.at",
+        )?;
         let rows = stmt.query_map([self.last_at], |r| {
-            Ok((r.get::<_, u32>(0)?, r.get::<_, i64>(1)? as u64, r.get::<_, String>(2)?, r.get::<_, i64>(3)?))
+            Ok((
+                r.get::<_, u32>(0)?,
+                r.get::<_, i64>(1)? as u64,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, bool>(5)?,
+            ))
         })?;
         for row in rows {
-            let (id, hash, it, at) = row?;
+            let (id, hash, it, at, source, seen) = row?;
             self.last_at = self.last_at.max(at);
             if lookup(id, hash).as_deref() != Some(it.as_str()) {
-                log::info!("translation {id} changed outside the addon: {it:?}");
+                // From the global database (sync.rs): thousands at the first sync, not logged.
+                if !source.starts_with("cloud:") {
+                    log::info!("translation {id} changed outside the addon: {it:?}");
+                }
                 if let Err(e) = map_refresh(con, id, hash) {
                     log::error!("map_it.db: {e}");
                 }
                 remember(id, hash, &it);
-                pipe::send_text(id, hash, &it);
+                if seen {
+                    pipe::send_text(id, hash, &it);
+                }
             }
         }
         Ok(())

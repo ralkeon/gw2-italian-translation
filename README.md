@@ -5,6 +5,9 @@ attraverso l'addon [Text Translator](https://github.com/ideka/modulep) di Ideka.
 
 - I testi arrivano dal gioco tramite Text Translator e vengono tradotti con DeepL (la tua chiave API).
 - Le traduzioni restano sul tuo PC (`strings.db`): ogni testo si traduce una volta sola.
+- Ogni 2 minuti le traduzioni nuove vanno su un database globale e arrivano quelle degli altri
+  giocatori: chi trova per primo un testo lo traduce per tutti, e le correzioni a mano hanno la
+  precedenza su quelle automatiche (vedi [`server/`](server/)).
 - I plurali degli oggetti sono generati nella sintassi del gioco (`Cuore[pl:"Cuori"] di torrone`).
 - I collaboratori hanno un editor in gioco per correggere le traduzioni.
 
@@ -23,7 +26,7 @@ I dati stanno in `Guild Wars 2/addons/italian_translation/`:
 
 | File | Cosa contiene |
 |---|---|
-| `config.toml` | impostazioni e chiavi API |
+| `config.toml` | impostazioni, chiavi API e chiave del database globale (`[sync]`, `enabled = false` per spegnerlo) |
 | `strings.db` | testi del gioco e traduzioni |
 | `map_it.db` | gli stessi testi nel formato di Local Translator, da scambiare tra collaboratori |
 | `contributor.json` | solo per i collaboratori: `{"user": "Nome"}` attiva l'editor |
@@ -44,6 +47,7 @@ cargo build --release
 ```
 
 Produce `target/release/italian_translation.dll` e `target/release/gw2it_shim.exe`.
+Il server del database globale è in [`server/`](server/README.md).
 
 ## Licenza
 

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub deepl: Deepl,
     pub gemini: Gemini,
+    pub sync: Sync,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -48,6 +49,33 @@ impl Default for Gemini {
         Self { api_key: String::new(), model: "gemini-3.8-flash".into() }
     }
 }
+
+/// Global translations database (server/ in the repository).
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Sync {
+    pub enabled: bool,
+    /// Empty: the project's server.
+    pub url: String,
+    /// This installation's key, given by the server the first time.
+    pub token: String,
+}
+
+impl Default for Sync {
+    fn default() -> Self {
+        Self { enabled: true, url: String::new(), token: String::new() }
+    }
+}
+
+impl Sync {
+    pub fn server(&self) -> &str {
+        let url = self.url.trim().trim_end_matches('/');
+        if url.is_empty() { SYNC_URL } else { url }
+    }
+}
+
+/// The project's server (server/ in the repository).
+const SYNC_URL: &str = "https://gw2it-sync.gw2it-sync.workers.dev";
 
 static CONFIG: Mutex<Option<(PathBuf, Config)>> = Mutex::new(None);
 
