@@ -17,6 +17,15 @@ static AGENT: LazyLock<Agent> = LazyLock::new(|| {
         .into()
 });
 
+/// For `ask`: long answers (a rewrite of dozens of texts).
+static SLOW_AGENT: LazyLock<Agent> = LazyLock::new(|| {
+    Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(120)))
+        .http_status_as_error(false)
+        .build()
+        .into()
+});
+
 /// Services with a free tier, for the options panel: (name, url, a fast model).
 pub const PRESETS: &[(&str, &str, &str)] = &[
     ("Groq", "https://api.groq.com/openai/v1", "openai/gpt-oss-120b"),
@@ -26,20 +35,53 @@ pub const PRESETS: &[(&str, &str, &str)] = &[
 ];
 
 /// `url`: the API base, e.g. https://api.groq.com/openai/v1.
-pub fn translate(url: &str, key: &str, model: &str, texts: &[&str]) -> Result<Vec<String>, Error> {
+pub fn translate(url: &str, key: &str, model: &str, texts: &[&str], glossary: &str) -> Result<Vec<String>, Error> {
     let body = json!({
         "model": model,
         "messages": [
-            { "role": "system", "content": format!("{LLM_INSTRUCTIONS}\nAnswer with a JSON object: {{\"translations\": [...]}}.") },
+            { "role": "system", "content": format!("{LLM_INSTRUCTIONS}{glossary}\nAnswer with a JSON object: {{\"translations\": [...]}}.") },
             { "role": "user", "content": Value::from(texts).to_string() },
         ],
         "response_format": { "type": "json_object" },
         "temperature": 0.3,
     });
-    let mut response = AGENT
+    let content = complete(&AGENT, url, key, &body)?;
+    let answer = parse(&content)?;
+    let list = if answer.is_array() { &answer } else { &answer["translations"] };
+    let translations: Vec<String> =
+        list.as_array().map(|t| t.iter().filter_map(|t| t.as_str().map(str::to_owned)).collect()).unwrap_or_default();
+    if translations.len() != texts.len() {
+        return Err(Error::BadRequest(format!("{} translations for {} texts", translations.len(), texts.len())));
+    }
+    Ok(translations)
+}
+
+/// A question to the model with a JSON answer of any shape (the consistency job in crates/server).
+pub fn ask(url: &str, key: &str, model: &str, system: &str, user: &str) -> Result<Value, Error> {
+    let body = json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user },
+        ],
+        "response_format": { "type": "json_object" },
+        "temperature": 0.2,
+    });
+    parse(&complete(&SLOW_AGENT, url, key, &body)?)
+}
+
+/// Some models think aloud before the JSON.
+fn parse(content: &str) -> Result<Value, Error> {
+    let json = content.find(['{', '[']).map_or("", |i| &content[i..]);
+    serde_json::from_str(json).map_err(|_| Error::BadRequest(format!("not JSON: {}", content.chars().take(100).collect::<String>())))
+}
+
+/// The text of the model's first answer to `body`, or why it did not answer.
+fn complete(agent: &Agent, url: &str, key: &str, body: &Value) -> Result<String, Error> {
+    let mut response = agent
         .post(format!("{}/chat/completions", url.trim_end_matches('/')))
         .header("Authorization", format!("Bearer {key}"))
-        .send_json(&body)
+        .send_json(body)
         .map_err(|e| Error::Other(e.to_string()))?;
 
     let status = response.status().as_u16();
@@ -62,16 +104,5 @@ pub fn translate(url: &str, key: &str, model: &str, texts: &[&str]) -> Result<Ve
     }
 
     let reply: Value = response.body_mut().read_json().map_err(|e| Error::Other(e.to_string()))?;
-    let content = reply["choices"][0]["message"]["content"].as_str().unwrap_or("");
-    // Some models think aloud before the JSON.
-    let json = content.find(['{', '[']).map_or("", |i| &content[i..]);
-    let answer: Value = serde_json::from_str(json)
-        .map_err(|_| Error::BadRequest(format!("not JSON: {}", content.chars().take(100).collect::<String>())))?;
-    let list = if answer.is_array() { &answer } else { &answer["translations"] };
-    let translations: Vec<String> =
-        list.as_array().map(|t| t.iter().filter_map(|t| t.as_str().map(str::to_owned)).collect()).unwrap_or_default();
-    if translations.len() != texts.len() {
-        return Err(Error::BadRequest(format!("{} translations for {} texts", translations.len(), texts.len())));
-    }
-    Ok(translations)
+    Ok(reply["choices"][0]["message"]["content"].as_str().unwrap_or("").to_owned())
 }

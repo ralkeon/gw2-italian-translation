@@ -4,7 +4,10 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use serde::{Deserialize, Serialize};
@@ -137,18 +140,26 @@ const SYNC_FALLBACK_URL: &str = "https://gw2it-sync.gw2it-sync.workers.dev";
 static CONFIG: Mutex<Option<(PathBuf, Config)>> = Mutex::new(None);
 
 /// contributor.json in the addon folder: whoever has it gets the translation editor.
+/// `"save_map": true` also keeps map_it.db up to date (store.rs), without having to create it.
 #[derive(Deserialize)]
 struct Contributor {
     user: String,
+    #[serde(default)]
+    save_map: bool,
 }
 
 static CONTRIBUTOR: Mutex<Option<String>> = Mutex::new(None);
+static SAVE_MAP: AtomicBool = AtomicBool::new(false);
 
 /// Reads contributor.json (at load). Missing: no editor.
 pub fn load_contributor(path: &Path) {
+    let mut save_map = false;
     let user = match fs::read_to_string(path) {
         Ok(text) => match serde_json::from_str::<Contributor>(&text) {
-            Ok(c) if !c.user.trim().is_empty() => Some(c.user.trim().to_owned()),
+            Ok(c) if !c.user.trim().is_empty() => {
+                save_map = c.save_map;
+                Some(c.user.trim().to_owned())
+            }
             Ok(_) => {
                 log::error!("{}: \"user\" is empty", path.display());
                 None
@@ -161,9 +172,15 @@ pub fn load_contributor(path: &Path) {
         Err(_) => None,
     };
     if let Some(user) = &user {
-        log::info!("contributor {user}: editor on");
+        log::info!("contributor {user}: editor on{}", if save_map { ", map_it.db on" } else { "" });
     }
+    SAVE_MAP.store(save_map, Ordering::Relaxed);
     *CONTRIBUTOR.lock().unwrap() = user;
+}
+
+/// True if contributor.json asks for map_it.db (`"save_map": true`).
+pub fn save_map() -> bool {
+    SAVE_MAP.load(Ordering::Relaxed)
 }
 
 /// The contributor's name, if this installation has the editor.

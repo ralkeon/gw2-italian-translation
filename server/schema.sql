@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS translations (
     PRIMARY KEY (id, hash)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS translations_seq ON translations (seq);
+-- The same English under other IDs (sql/same.sql).
+CREATE INDEX IF NOT EXISTS translations_hash ON translations (hash);
 
 -- Translations replaced by a hand correction, to restore one if needed.
 CREATE TABLE IF NOT EXISTS history (
@@ -43,3 +45,19 @@ CREATE TABLE IF NOT EXISTS users (
     -- Older databases: ALTER TABLE users ADD COLUMN contributor ...
     contributor INTEGER NOT NULL DEFAULT 0
 );
+
+-- Glossary (gw2it_text::glossary): the Italian of English words that a contributor fixed, with the
+-- wrong forms the translators write instead. One row per English word; `seq` grows with every change
+-- (its own counter, apart from the translations'), so that a client asks only for what changed.
+-- `trust` as in translations: only contributors (2) and the owner (3) write here, and a weaker voice
+-- never changes what a stronger one decided (gw2it_text::glossary::merge).
+CREATE TABLE IF NOT EXISTS glossary (
+    en     TEXT    PRIMARY KEY,       -- English word, lowercase
+    it     TEXT    NOT NULL,
+    wrong  TEXT    NOT NULL,          -- JSON array of strings
+    author TEXT    NOT NULL,
+    at     INTEGER NOT NULL,          -- unix ms
+    seq    INTEGER NOT NULL,
+    trust  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS glossary_seq ON glossary (seq);

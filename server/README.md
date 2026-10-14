@@ -33,6 +33,10 @@ interchangeable versions with the same API, schema (schema.sql) and statements (
   A row for a text that /translate made may carry two more elements, [.., signature, answered XML]:
   the proof that the server made it (see Trust).
 
+  The same request carries the glossary: `"gsince"` and `"glossary": [[en, it, [wrong...]]...]` (up to 50
+  terms, from contributors only), and the answer has `"glossary": [[en, it, [wrong...], author, seq]...]`,
+  `"gseq"`, `"gmore"` (see Glossary).
+
 - `POST /translate {"texts": [xml...], "neighbours"}` with the same token -> `{"translations": [xml...]}`
   (crates/server only, with `--translators translators.json`): the server's translators, for players
   without keys: DeepL, then the next ones while it is out of quota or down. Up to 50 texts; 30,000 characters per player per day (table `usage`); errors keep DeepL's
@@ -59,8 +63,36 @@ not check proofs: what addons send it is trust 0 (the owner and the contributors
 Every row also has its `author`: a token that makes up translations can be banned
 (`users.banned`), and what it wrote found by `author` and replaced.
 
+The same English under other IDs (ten "Torch" items, same `hash` and `en`): after every write,
+`sql/same.sql` gives their machine translations (trust 0 and 1) the best translation of that
+English, if it is stronger. With hand corrections, the best is the text most of them have (the
+general one): a hand correction goes to all the machine translations, and one made later that
+differs is for its own context. Hand corrections are never replaced by this, whoever made the
+other. The replaced texts go to `history` (`sql/same_history.sql`), the changed rows get new
+`seq`, so every client receives them.
+
 Merge, in short: the strongest row wins. `next_s` is the wait the addon keeps between syncs: raise
 `NEXT_S` in src/index.js if the free plan runs short.
+
+## Glossary
+
+What the contributors fix by hand in a name ("Seraph" is "Serafini", not "Serafi") is learned by the
+addon (crates/text/src/glossary.rs) and kept here, so that everybody downloads it with /sync (table
+`glossary`, schema.sql: one row per English word, its own `seq`):
+
+- **Who writes**: contributors (trust 2) and the owner (3); the others' terms are ignored. Terms are
+  merged with the same function in the addon, in crates/server and in the Worker (`merge`, in
+  crates/text/src/glossary.rs and server/src/glossary.js): the strongest voice decides the Italian, the
+  last of equals; the one it replaces becomes a wrong form; wrong forms only add up.
+- **Checked**: a term is an English word of letters and an Italian form (and wrong forms) of a few
+  plain words, no digits or punctuation: it ends up in the prompts of language models.
+- **Used**: the addon tells its language models the terms in the texts it translates, and repairs the
+  wrong forms in every machine translation, new, received and already saved. /translate does the same
+  for the players without keys, before signing the answer, so the proof still matches.
+- **Spare**: `replicate` copies the glossary both ways with the translations (the terms written on the
+  spare have seq >= `SEQ_FLOOR`).
+- Databases from before it: `schema.sql` has `CREATE TABLE IF NOT EXISTS`, so the main server creates
+  the table at start and the spare with `npx wrangler d1 execute gw2it --remote --file schema.sql`.
 
 ## Self-hosted (crates/server)
 
@@ -96,7 +128,7 @@ npx wrangler deploy                     # prints the URL
 ## Tests
 
 ```sh
-npm test                                # the SQL of /sync on a local SQLite
+npm test                                # the SQL of /sync and the glossary on a local SQLite
 npx wrangler d1 execute gw2it --local --file schema.sql && npx wrangler dev
 GW2IT_SYNC_URL=http://localhost:8787 cargo test -p gw2it-addon against_server -- --ignored   # the addon against it
 # fallback and nightly copy end to end: see the comment of sync::tests::failover

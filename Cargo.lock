@@ -347,6 +347,7 @@ version = "0.2.1"
 name = "gw2it-translate"
 version = "0.2.1"
 dependencies = [
+ "gw2it-text",
  "log",
  "serde_json",
  "ureq",

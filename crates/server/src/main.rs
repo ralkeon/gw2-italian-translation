@@ -6,6 +6,8 @@
 //! gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
 //!              [--translators translators.json]   (see translate.rs)
 //! gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>   (see replicate.rs)
+//! gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run]
+//!                                                                         (see consistency.rs)
 
 use std::{
     collections::HashMap,
@@ -21,6 +23,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tiny_http::{Header, Method, Request, Response, Server};
 
+mod consistency;
+mod glossary;
 mod replicate;
 mod sign;
 mod translate;
@@ -29,6 +33,8 @@ const SCHEMA: &str = include_str!("../../../server/schema.sql");
 const SQL_HISTORY: &str = include_str!("../../../server/sql/history.sql");
 const SQL_UPSERT: &str = include_str!("../../../server/sql/upsert.sql");
 const SQL_PULL: &str = include_str!("../../../server/sql/pull.sql");
+const SQL_SAME_HISTORY: &str = include_str!("../../../server/sql/same_history.sql");
+const SQL_SAME: &str = include_str!("../../../server/sql/same.sql");
 
 /// Rows accepted in one /sync: the addon sends at most this many.
 const PUSH_MAX: usize = 200;
@@ -66,19 +72,23 @@ impl From<rusqlite::Error> for HttpError {
 
 const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
                     [--translators translators.json]
-       gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>";
+       gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>
+       gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run]";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let replicate = args.first().is_some_and(|a| a == "replicate");
-    if replicate {
+    let consistency = args.first().is_some_and(|a| a == "consistency");
+    if replicate || consistency {
         args.remove(0);
     }
+    let dry_run = args.iter().any(|a| a == "--dry-run");
+    args.retain(|a| a != "--dry-run");
     let mut options = HashMap::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators"), Some(v)) => {
+            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups"), Some(v)) => {
                 options.insert(name.to_owned(), v);
             }
             _ => {
@@ -106,6 +116,15 @@ fn main() {
             eprintln!("replicate: {e}");
             std::process::exit(1);
         }
+        return;
+    }
+    if consistency {
+        let Some(file) = options.remove("--translators") else {
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        };
+        let max_groups = options.remove("--max-groups").and_then(|n| n.parse().ok()).unwrap_or(15);
+        run_consistency(&db, &file, max_groups, dry_run);
         return;
     }
     let listen = options.remove("--listen").unwrap_or_else(|| "127.0.0.1:8790".into());
@@ -142,6 +161,41 @@ fn main() {
         .collect();
     for w in workers {
         let _ = w.join();
+    }
+}
+
+/// The nightly consistency job (consistency.rs): the language models of translators.json settle the
+/// English words that the translations render in more than one way.
+fn run_consistency(db: &str, translators_file: &str, max_groups: usize, dry_run: bool) {
+    let mut chain = Chain::default();
+    chain.set(translators(translators_file));
+    let con = open(db).unwrap_or_else(|e| {
+        eprintln!("cannot open {db}: {e}");
+        std::process::exit(1);
+    });
+    let ask = |system: &str, user: &str| {
+        chain.ask(system, user).map_err(|e| match e {
+            gw2it_translate::Error::BadRequest(why) => consistency::Failure::Unusable(why),
+            e => consistency::Failure::Stop(e.to_string()),
+        })
+    };
+    match consistency::run(&con, &ask, &consistency::Options { max_groups, dry_run }) {
+        Ok(report) => {
+            println!(
+                "consistency: {} groups, {} looked at, {} consistent, {} texts rewritten, {} terms{}{}",
+                report.groups,
+                report.checked,
+                report.consistent,
+                report.rewritten,
+                report.terms,
+                if dry_run { " (dry run: nothing changed)" } else { "" },
+                report.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),
+            );
+        }
+        Err(e) => {
+            eprintln!("consistency: database: {e}");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -182,6 +236,7 @@ fn open(path: &str) -> rusqlite::Result<Connection> {
         )?;
     }
     con.execute_batch(translate::SCHEMA)?;
+    con.execute_batch(consistency::SCHEMA)?;
     Ok(con)
 }
 
@@ -366,6 +421,8 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
         let tx = db.transaction()?;
         tx.execute(SQL_HISTORY, params![json, name, now])?;
         tx.execute(SQL_UPSERT, params![json, name, now, 0])?;
+        tx.execute(SQL_SAME_HISTORY, params![json, name, now])?;
+        tx.execute(SQL_SAME, params![json, name, now, 0])?;
         tx.commit()?;
     }
 
@@ -383,7 +440,28 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
             ]))
         })?
         .collect::<rusqlite::Result<_>>()?;
+    drop(stmt);
     let seq = pulled.last().and_then(|r| r[6].as_i64()).unwrap_or(since);
     let more = pulled.len() as i64 == PULL_MAX;
-    Ok(json!({ "rows": pulled, "seq": seq, "more": more, "next_s": NEXT_S, "accepted": rows.len() }))
+
+    // The glossary: the contributors' terms in, everyone's updates out.
+    let sent_terms = input["glossary"].as_array().map(Vec::as_slice).unwrap_or_default();
+    if sent_terms.len() > glossary::PUSH_MAX {
+        return Err(HttpError(413, "too many terms"));
+    }
+    if level >= 1 {
+        let trust = if level >= 2 { 3 } else { 2 };
+        let now = now_ms();
+        let tx = db.transaction()?;
+        for term in sent_terms.iter().filter_map(glossary::term_of) {
+            glossary::put(&tx, &term, &name, trust, now, 0)?;
+        }
+        tx.commit()?;
+    }
+    let gsince = input["gsince"].as_i64().filter(|&s| s > 0).unwrap_or(0);
+    let (terms, gseq, gmore) = glossary::pull(&db, gsince)?;
+    Ok(json!({
+        "rows": pulled, "seq": seq, "more": more, "next_s": NEXT_S, "accepted": rows.len(),
+        "glossary": terms, "gseq": gseq, "gmore": gmore,
+    }))
 }

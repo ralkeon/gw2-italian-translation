@@ -29,7 +29,13 @@ use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use ureq::Agent;
 
-use crate::{config, markup, state::SHARED, store::now_ms};
+use gw2it_text::glossary::{self, Term};
+
+use crate::{
+    config, markup,
+    state::SHARED,
+    store::{self, now_ms},
+};
 
 /// Rows sent in one request (the server accepts up to 200).
 const PUSH_MAX: usize = 200;
@@ -169,7 +175,7 @@ fn sync_once(con: &mut Connection, sync: &config::Sync, stop: &Receiver<()>) -> 
     match cycle(con, main, stop) {
         Ok(next) => {
             // On the main server: a later fallback starts again from its seq.
-            con.execute("DELETE FROM sync_state WHERE k = 'seq_spare'", [])?;
+            con.execute("DELETE FROM sync_state WHERE k IN ('seq_spare', 'gseq_spare')", [])?;
             Ok((next, false))
         }
         Err(Error::Unreachable(e)) => {
@@ -193,13 +199,21 @@ fn open(db: &Path) -> rusqlite::Result<Connection> {
 }
 
 /// Where the last sync stopped: newest seq received (from the server in use), and the last row
-/// sent, by (at, id, hash). The rows sent to the spare reach the main server through it.
+/// sent, by (at, id, hash). The rows sent to the spare reach the main server through it. The same
+/// for the glossary: newest seq received, and the time of the newest term learned here that was sent.
 #[derive(Clone, Copy, Default)]
 struct Mark {
     seq: i64,
     at: i64,
     id: i64,
     hash: i64,
+    gseq: i64,
+    gsent: i64,
+}
+
+/// The sync_state key of the glossary's seq that goes with `seq_key`.
+fn glossary_key(seq_key: &str) -> String {
+    format!("g{seq_key}")
 }
 
 impl Mark {
@@ -210,12 +224,21 @@ impl Mark {
         // The spare is a copy of the main server with its seq, plus what was written there (seq
         // from 10^12): what we had from the main server we need not get again.
         let seq = get(seq_key)?.max(get("seq")?);
-        Ok(Self { seq, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")? })
+        let gseq = get(&glossary_key(seq_key))?.max(get("gseq")?);
+        Ok(Self { seq, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")?, gseq, gsent: get("gsent_at")? })
     }
 
     fn save(&self, tx: &Transaction, seq_key: &str) -> rusqlite::Result<()> {
         let mut stmt = tx.prepare_cached("INSERT OR REPLACE INTO sync_state (k, v) VALUES (?1, ?2)")?;
-        for (k, v) in [(seq_key, self.seq), ("sent_at", self.at), ("sent_id", self.id), ("sent_hash", self.hash)] {
+        let gkey = glossary_key(seq_key);
+        for (k, v) in [
+            (seq_key, self.seq),
+            ("sent_at", self.at),
+            ("sent_id", self.id),
+            ("sent_hash", self.hash),
+            (gkey.as_str(), self.gseq),
+            ("gsent_at", self.gsent),
+        ] {
             stmt.execute(params![k, v])?;
         }
         Ok(())
@@ -235,13 +258,27 @@ struct Outgoing {
 #[derive(Deserialize)]
 struct Remote(u32, String, String, String, String, String, #[allow(dead_code)] i64);
 
+/// A term received: [en, it, [wrong...], author, seq].
+#[derive(Deserialize)]
+struct RemoteTerm(String, String, Vec<String>, #[allow(dead_code)] String, #[allow(dead_code)] i64);
+
 #[derive(Deserialize)]
 struct Reply {
     rows: Vec<Remote>,
     seq: i64,
     more: bool,
     next_s: u64,
+    // Missing from a server without the glossary.
+    #[serde(default)]
+    glossary: Vec<RemoteTerm>,
+    #[serde(default)]
+    gseq: i64,
+    #[serde(default)]
+    gmore: bool,
 }
+
+/// Terms sent in one request (the server accepts up to 50).
+const TERMS_MAX: usize = 50;
 
 /// One sync: a few requests while there is more to send or to receive. Returns the wait before
 /// the next one.
@@ -258,17 +295,26 @@ fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Du
         let mut mark = Mark::load(con, target.seq_key())?;
         let outgoing = pending(con, mark)?;
         let rows: Vec<&Value> = outgoing.iter().map(|o| &o.row).collect();
-        let reply: Reply =
-            post(&format!("{server}/sync"), Some(&token), &json!({ "since": mark.seq, "rows": rows })).map_err(refused)?;
+        let (terms, terms_at) = pending_terms(con, mark.gsent)?;
+        let reply: Reply = post(
+            &format!("{server}/sync"),
+            Some(&token),
+            &json!({ "since": mark.seq, "rows": rows, "gsince": mark.gseq, "glossary": terms }),
+        )
+        .map_err(refused)?;
         if let Some(last) = outgoing.last() {
             (mark.at, mark.id, mark.hash) = (last.at, last.id, last.hash);
         }
         mark.seq = mark.seq.max(reply.seq);
+        mark.gsent = mark.gsent.max(terms_at);
+        mark.gseq = mark.gseq.max(reply.gseq);
+        // The glossary first: the translations that come with it are repaired with it.
+        received_terms(&reply.glossary);
         received += apply(con, &reply.rows, mark, target.seq_key())?;
         sent += outgoing.len();
         next = Duration::from_secs(reply.next_s.clamp(30, 3600));
         let stopping = matches!(stop.try_recv(), Err(TryRecvError::Disconnected));
-        if stopping || (outgoing.len() < PUSH_MAX && !reply.more) {
+        if stopping || (outgoing.len() < PUSH_MAX && !reply.more && terms.len() < TERMS_MAX && !reply.gmore) {
             break;
         }
     }
@@ -339,10 +385,54 @@ fn pending(con: &Connection, mark: Mark) -> rusqlite::Result<Vec<Outgoing>> {
     .collect()
 }
 
+/// The terms this installation learned that the server has not got (up to `TERMS_MAX`, oldest
+/// first): [en, it, [wrong...]], and the time of the newest. Terms received from the server are
+/// not sent back.
+fn pending_terms(con: &Connection, after: i64) -> rusqlite::Result<(Vec<Value>, i64)> {
+    let mut stmt = con.prepare_cached(
+        "SELECT en, it, wrong, at FROM glossary
+         WHERE en IN (SELECT en FROM glossary WHERE local = 1 AND at > ?1) ORDER BY en, at",
+    )?;
+    // One term per English word: its rows are together.
+    let mut terms: Vec<(String, String, Vec<String>, i64)> = Vec::new();
+    for row in stmt.query_map([after], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?)))? {
+        let (en, it, wrong, at) = row?;
+        match terms.last_mut().filter(|t| t.0 == en) {
+            Some(term) => {
+                term.2.push(wrong);
+                term.3 = term.3.max(at);
+            }
+            None => terms.push((en, it, vec![wrong], at)),
+        }
+    }
+    terms.sort_by_key(|t| t.3);
+    terms.truncate(TERMS_MAX);
+    let newest = terms.iter().map(|t| t.3).max().unwrap_or(after);
+    Ok((terms.into_iter().map(|(en, it, wrong, _)| json!([en, it, wrong])).collect(), newest))
+}
+
+/// The terms the server sent: checked, then kept and used (the server is not trusted: they go into
+/// the translators' prompts and change texts).
+fn received_terms(terms: &[RemoteTerm]) {
+    let valid: Vec<Term> = terms
+        .iter()
+        .map(|RemoteTerm(en, it, wrong, ..)| Term { en: en.clone(), it: it.clone(), wrong: wrong.clone() })
+        .filter(|t| {
+            let ok = t.is_valid();
+            if !ok {
+                log::warn!("sync: glossary term {:?} refused", t.en);
+            }
+            ok
+        })
+        .collect();
+    store::receive_terms(valid);
+}
+
 /// Saves the received rows and the new mark, in one transaction. Returns how many changed here.
 fn apply(con: &mut Connection, rows: &[Remote], mark: Mark, seq_key: &str) -> Result<usize, Error> {
     let tx = con.transaction()?;
     let mut changed = 0;
+    let terms = store::glossary();
     {
         let mut local_en = tx.prepare_cached("SELECT en FROM strings WHERE id = ?1 AND hash = ?2")?;
         // ?7..?9: the last row sent. A hand correction made after it is still ours alone.
@@ -371,6 +461,14 @@ fn apply(con: &mut Connection, rows: &[Remote], mark: Mark, seq_key: &str) -> Re
                 log::warn!("sync: translation of {id} from {author} breaks the markup ({}): skipped", mismatch.join(" "));
                 continue;
             }
+            // A machine translation from outside gets our glossary too (never a hand correction).
+            let fixed;
+            let it = if status == "auto" {
+                fixed = glossary::fix(&en, it, &terms);
+                &fixed
+            } else {
+                it
+            };
             changed += upsert.execute(params![
                 id,
                 hash as i64,
@@ -443,7 +541,7 @@ mod tests {
             r#"[2,"0000000000000002","Shield","Scudo","manual"]"#,
         ]);
         // Sent: the mark is past both rows.
-        let sent = Mark { seq: 0, at: 20, id: 2, hash: 2 };
+        let sent = Mark { seq: 0, at: 20, id: 2, hash: 2, ..Mark::default() };
         assert!(pending(&con, sent).unwrap().is_empty());
 
         // A hand correction made after sending: not replaced by the server's.
@@ -467,7 +565,7 @@ mod tests {
         assert_eq!(out[0].row[3], "Scudo nuovo");
 
         // Once sent, a newer correction from someone else replaces it; a machine one never does.
-        let sent = Mark { seq: 9, at: out[0].at, id: 2, hash: 2 };
+        let sent = Mark { seq: 9, at: out[0].at, id: 2, hash: 2, ..Mark::default() };
         apply(&mut con, &[remote(2, "Shield", "Egida", "manual"), remote(4, "Axe", "Scure", "manual")], sent, "seq").unwrap();
         apply(&mut con, &[remote(2, "Shield", "Scudetto", "auto")], sent, "seq").unwrap();
         assert_eq!(texts(&con)[1..], [(2, "Egida".into(), "cloud:Bea".into()), (4, "Scure".into(), "cloud:Bea".into())]);
@@ -490,6 +588,67 @@ mod tests {
         assert!(got.contains(&(1, "Spada".into(), "cloud:anonimo".into())), "{got:?}");
         assert!(got.contains(&(2, "Scudo".into(), "cloud:anonimo".into())), "{got:?}");
         assert!(pending(&b, Mark::load(&b, "seq").unwrap()).unwrap().is_empty());
+    }
+
+    #[test]
+    fn terms_to_send_are_the_ones_learned_here() {
+        let con = db();
+        con.execute_batch(
+            "INSERT INTO glossary VALUES ('seraph', 'Serafi', 'Serafini', 10, 1), ('seraph', 'Serafino', 'Serafini', 11, 1),
+                                         ('vigil', 'Veglia', 'Vigilia', 12, 0), ('pact', 'Accordo', 'Patto', 30, 1);",
+        )
+        .unwrap();
+        // One term with all its wrong forms, even those older than the mark; from the server: never.
+        let (terms, newest) = pending_terms(&con, 0).unwrap();
+        assert_eq!(terms, [json!(["seraph", "Serafini", ["Serafi", "Serafino"]]), json!(["pact", "Patto", ["Accordo"]])]);
+        assert_eq!(newest, 30);
+        let (terms, newest) = pending_terms(&con, 11).unwrap();
+        assert_eq!(terms, [json!(["pact", "Patto", ["Accordo"]])]);
+        assert_eq!(newest, 30);
+        assert!(pending_terms(&con, 30).unwrap().0.is_empty());
+    }
+
+    /// The glossary through a real server, from a contributor to another installation:
+    /// cargo build -p gw2it-server && GW2IT_SERVER_BIN=target/debug/gw2it-server cargo test -p gw2it-addon glossary_through -- --ignored
+    #[test]
+    #[ignore]
+    fn glossary_through_the_server() {
+        use std::process::Command;
+        let bin = std::env::var("GW2IT_SERVER_BIN").expect("GW2IT_SERVER_BIN");
+        let dir = std::env::temp_dir().join(format!("gw2it-glossary-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let server_db = dir.join("main.db");
+        let mut child = Command::new(&bin).args(["--db", server_db.to_str().unwrap(), "--listen", "127.0.0.1:8796"]).spawn().unwrap();
+        thread::sleep(Duration::from_millis(500));
+        let url = "http://127.0.0.1:8796";
+        let (_stop_tx, stop) = mpsc::channel();
+
+        // A is a contributor, B is not (the server makes contributors by hand).
+        let token_a = register(Target { url, token: "", spare: false }).unwrap();
+        Connection::open(&server_db).unwrap().execute("UPDATE users SET contributor = 1", []).unwrap();
+        let token_b = register(Target { url, token: "", spare: false }).unwrap();
+        let (mut a, mut b) = (db(), db());
+        a.execute_batch("INSERT INTO glossary VALUES ('seraph', 'Serafi', 'Serafini', 10, 1);").unwrap();
+        b.execute_batch("INSERT INTO glossary VALUES ('vigil', 'Veglia', 'Vigilia', 20, 1);").unwrap();
+
+        cycle(&mut a, Target { url, token: &token_a, spare: false }, &stop).unwrap();
+        cycle(&mut b, Target { url, token: &token_b, spare: false }, &stop).unwrap();
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        // The contributor's term is on the server and reached B; B's own was refused.
+        let on_server: Vec<(String, String, String, i64)> = {
+            let check = Connection::open(&server_db).unwrap();
+            let mut stmt = check.prepare("SELECT en, it, wrong, trust FROM glossary").unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap().map(Result::unwrap).collect()
+        };
+        assert_eq!(on_server, [("seraph".into(), "Serafini".into(), "[\"Serafi\"]".into(), 2)]);
+        let got = store::glossary();
+        assert!(got.iter().any(|t| t.en == "seraph" && t.it == "Serafini" && t.wrong == ["Serafi"]), "{got:?}");
+        assert!(!got.iter().any(|t| t.en == "vigil"), "{got:?}");
+        assert_eq!(Mark::load(&b, "seq").unwrap().gseq, 1);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Fallback and nightly copy, end to end. The spare: cd server && echo REPLICA_KEY=test > .dev.vars
@@ -538,9 +697,13 @@ mod tests {
         )
         .unwrap();
 
-        // Main server up: A sends its texts there; at night the spare gets a copy.
+        // Main server up: A sends its texts there; at night the spare gets a copy, with the glossary.
         let mut main = start_main();
         assert!(!sync_once(&mut a, &sync, &stop).unwrap().1);
+        Connection::open(&main_db)
+            .unwrap()
+            .execute("INSERT INTO glossary VALUES ('failover', 'Passaggio', '[\"Cambio\"]', 'Ana', 1, 1, 2)", [])
+            .unwrap();
         println!("{}", replicate());
 
         // Main server down: B falls back to the spare, gets A's texts from the copy, sends its own;
@@ -548,6 +711,8 @@ mod tests {
         main.kill().unwrap();
         main.wait().unwrap();
         assert!(sync_once(&mut b, &sync, &stop).unwrap().1);
+        let terms = store::glossary();
+        assert!(terms.iter().any(|t| t.en == "failover" && t.wrong == ["Cambio"]), "{terms:?}");
         let got = texts(&b);
         assert!(got.contains(&(1, "Spada".into(), "cloud:anonimo".into())), "{got:?}");
         assert!(sync_once(&mut a, &sync, &stop).unwrap().1);
@@ -562,7 +727,8 @@ mod tests {
         let check = Connection::open(&main_db).unwrap();
         let nine: (String, String) =
             check.query_row("SELECT it, status FROM translations WHERE id = 9", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
-        assert_eq!(nine, ("Nove".into(), "manual".into()));
+        // B is no contributor: its hand correction counts as a machine translation (trust levels).
+        assert_eq!(nine, ("Nove".into(), "auto".into()));
         // The spare no longer holds rows of its own.
         assert!(replicate().contains("back 0 translations"));
         main.kill().unwrap();

@@ -1,0 +1,394 @@
+//! The consistency job: `gw2it-server consistency --translators translators.json`, run by cron.
+//!
+//! The glossary (glossary.rs) fixes a word; it cannot make "Soldato Serafino", "Soldato dei
+//! Serafini" and "Guardia dei Serafini" one way of saying it. This job does, once a night:
+//!
+//! 1. `gw2it_text::consistency::groups` finds the English words that the translations render in
+//!    more than one form.
+//! 2. For each group (the biggest first, a few per run) a language model is asked whether the forms
+//!    are really inconsistent and, if so, which single form and construction to use, and to rewrite
+//!    the texts that differ. Hand corrections (trust 2 and 3) are never changed: they are the
+//!    examples, and what a contributor put in the glossary is the form to follow.
+//! 3. The answer is checked: the markup must be the one of the English, the text must have the
+//!    chosen form and be different from before. Machine translations (trust 1 and below) are
+//!    rewritten, with the old text in `history` and `consistency_log`; the form chosen goes into
+//!    the glossary with trust 1 (below every contributor), and the old forms as wrong ones, so that
+//!    the next translations come out right.
+//!
+//! A group the model found consistent, or that the job has settled, is not asked again until its
+//! forms change (`consistency_state`).
+
+use gw2it_text::{
+    consistency::{self, Entry, Group},
+    glossary::Term,
+    markup,
+};
+use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::{Value, json};
+
+use crate::{glossary, now_ms};
+
+pub const SCHEMA: &str = "
+-- The groups the job has looked at, and their forms then.
+CREATE TABLE IF NOT EXISTS consistency_state (
+    word      TEXT    PRIMARY KEY,
+    signature TEXT    NOT NULL,
+    checked   INTEGER NOT NULL
+);
+-- Every text the job rewrote, to undo it if the model got it wrong.
+CREATE TABLE IF NOT EXISTS consistency_log (
+    id   INTEGER NOT NULL,
+    hash TEXT    NOT NULL,
+    word TEXT    NOT NULL,
+    old  TEXT    NOT NULL,
+    new  TEXT    NOT NULL,
+    at   INTEGER NOT NULL
+);";
+
+/// Texts of a group given to the model: enough to show every form.
+const ITEMS_MAX: usize = 40;
+const TEXT_MAX: usize = 4000;
+/// The glossary's author for what the job decides.
+const AUTHOR: &str = "consistency";
+
+const SYSTEM: &str = "You keep the Italian translation of the game Guild Wars 2 consistent. You get an \
+English word and the texts that contain it, each with its Italian translation, as JSON. Decide whether \
+the Italian renders the word in more than one way that a player would see as a mistake: different \
+spellings or number of the same name (Serafino / Serafini), or different constructions for the same kind \
+of thing (\"Soldato Serafino\" / \"Soldato dei Serafini\" / \"Guardia dei Serafini\"). Differences that \
+grammar requires (plural, possessive, gender agreement, a different meaning of the word) are fine.
+
+If it is fine, answer {\"consistent\": true}.
+
+Otherwise choose ONE Italian form for the word and ONE construction, and rewrite the texts that differ.
+- Names of a faction, race or group are used as in \"<noun> dei <Name in the plural>\": \"Guardia dei \
+Serafini\", \"Soldato dei Serafini\".
+- Texts with \"editable\": false are hand corrections by the translators: never change them, and follow \
+their form. If \"glossary\" is given, it is the form the translators chose: use it.
+- Rewrite only texts with \"editable\": true, and only what is needed. Keep every %token%, every \
+<tag>...</tag> and every line break exactly as they are; keep names that are left in English.
+- Natural Italian, as in a video game.
+
+Answer with JSON: {\"consistent\": false, \"term\": \"<the Italian form of the word, as it appears in the \
+texts, e.g. Serafini>\", \"rewrites\": [{\"n\": <the text's n>, \"it\": \"<the new Italian text>\"}]}";
+
+#[derive(Default, Debug)]
+pub struct Report {
+    pub groups: usize,
+    pub checked: usize,
+    pub consistent: usize,
+    pub rewritten: usize,
+    pub terms: usize,
+    /// Why the run stopped early, if it did.
+    pub stopped: Option<String>,
+}
+
+pub struct Options {
+    pub max_groups: usize,
+    /// Ask and check, but change nothing.
+    pub dry_run: bool,
+}
+
+/// A text the job may rewrite: a machine translation, with no plural marks (`[pl:"..."]`, made by
+/// the addon from the singular: a rewrite would break them).
+fn editable(entry: &Entry) -> bool {
+    entry.trust <= 1 && !entry.it.contains("[pl:") && !entry.it.contains("[s]")
+}
+
+fn load(con: &Connection) -> rusqlite::Result<Vec<Entry>> {
+    let mut stmt = con.prepare("SELECT id, hash, en, it, trust FROM translations ORDER BY id, hash")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Entry { id: r.get(0)?, hash: r.get(1)?, en: r.get(2)?, it: r.get(3)?, trust: r.get(4)? })
+    })?;
+    rows.collect()
+}
+
+/// Up to `ITEMS_MAX` texts of the group: every form is there, hand corrections first.
+fn sample(group: &Group, entries: &[Entry]) -> Vec<usize> {
+    let mut chosen: Vec<usize> = group.entries.clone();
+    chosen.sort_by_key(|&i| (editable(&entries[i]), i));
+    chosen.truncate(ITEMS_MAX);
+    chosen.sort_unstable();
+    chosen
+}
+
+/// The glossary term of `word` and its trust, if any.
+fn glossary_term(con: &Connection, word: &str) -> rusqlite::Result<Option<(String, i64)>> {
+    con.query_row("SELECT it, trust FROM glossary WHERE en = ?1", [word], |r| Ok((r.get(0)?, r.get(1)?))).optional()
+}
+
+/// Runs the job. `ask` is the language model: system prompt and user message in, JSON out; an Err
+/// stops the run (out of quota, no model), except for an answer that is not usable.
+pub fn run(
+    con: &Connection,
+    ask: &dyn Fn(&str, &str) -> Result<Value, Failure>,
+    options: &Options,
+) -> rusqlite::Result<Report> {
+    let mut report = Report::default();
+    let entries = load(con)?;
+    let found = consistency::groups(&entries);
+    report.groups = found.len();
+    for group in found {
+        if report.checked >= options.max_groups {
+            break;
+        }
+        let known: Option<String> =
+            con.query_row("SELECT signature FROM consistency_state WHERE word = ?1", [&group.word], |r| r.get(0)).optional()?;
+        if known.as_deref() == Some(group.signature().as_str()) {
+            continue;
+        }
+        report.checked += 1;
+        match settle(con, &entries, &group, ask, options)? {
+            Outcome::Consistent => {
+                report.consistent += 1;
+                remember(con, &group, options)?;
+            }
+            Outcome::Rewrote { texts, term } => {
+                report.rewritten += texts;
+                report.terms += usize::from(term);
+            }
+            Outcome::Unusable(why) => eprintln!("consistency: {}: {why}", group.word),
+            Outcome::Stop(why) => {
+                report.stopped = Some(why);
+                break;
+            }
+        }
+    }
+    Ok(report)
+}
+
+/// Why the model could not be asked.
+pub enum Failure {
+    /// Out of quota, nobody to ask: the run ends.
+    Stop(String),
+    /// This answer is no good: the group is left for another night.
+    Unusable(String),
+}
+
+enum Outcome {
+    Consistent,
+    Rewrote { texts: usize, term: bool },
+    Unusable(String),
+    Stop(String),
+}
+
+fn remember(con: &Connection, group: &Group, options: &Options) -> rusqlite::Result<()> {
+    if !options.dry_run {
+        con.execute(
+            "INSERT OR REPLACE INTO consistency_state (word, signature, checked) VALUES (?1, ?2, ?3)",
+            params![group.word, group.signature(), now_ms()],
+        )?;
+    }
+    Ok(())
+}
+
+fn settle(
+    con: &Connection,
+    entries: &[Entry],
+    group: &Group,
+    ask: &dyn Fn(&str, &str) -> Result<Value, Failure>,
+    options: &Options,
+) -> rusqlite::Result<Outcome> {
+    let chosen = sample(group, entries);
+    let existing = glossary_term(con, &group.word)?;
+    let texts: Vec<Value> = chosen
+        .iter()
+        .enumerate()
+        .map(|(n, &i)| json!({ "n": n, "en": entries[i].en, "it": entries[i].it, "editable": editable(&entries[i]) }))
+        .collect();
+    let user = json!({ "word": group.word, "glossary": existing.as_ref().map(|(it, _)| it), "texts": texts }).to_string();
+    let answer = match ask(SYSTEM, &user) {
+        Ok(answer) => answer,
+        Err(Failure::Stop(why)) => return Ok(Outcome::Stop(why)),
+        Err(Failure::Unusable(why)) => return Ok(Outcome::Unusable(why)),
+    };
+    if answer["consistent"].as_bool() == Some(true) {
+        return Ok(Outcome::Consistent);
+    }
+
+    // What the translators chose beats what the model says.
+    let decided = existing.as_ref().filter(|(_, trust)| *trust >= 2).map(|(it, _)| it.clone());
+    let Some(term) = decided.or_else(|| answer["term"].as_str().map(str::to_owned)) else {
+        return Ok(Outcome::Unusable("no term in the answer".into()));
+    };
+    let candidate = Term { en: group.word.clone(), it: term.clone(), wrong: Vec::new() };
+    if !candidate.is_valid() {
+        return Ok(Outcome::Unusable(format!("term {term:?} is not valid")));
+    }
+
+    let mut done: Vec<(usize, String)> = Vec::new();
+    for rewrite in answer["rewrites"].as_array().map(Vec::as_slice).unwrap_or_default() {
+        let (Some(n), Some(new)) = (rewrite["n"].as_u64(), rewrite["it"].as_str()) else {
+            continue;
+        };
+        let Some(&i) = chosen.get(n as usize) else {
+            continue;
+        };
+        let entry = &entries[i];
+        let usable = editable(entry)
+            && new != entry.it
+            && !new.trim().is_empty()
+            && new.chars().count() <= TEXT_MAX
+            && markup::token_mismatch(&entry.en, new).is_empty()
+            && new.to_lowercase().contains(&term.to_lowercase());
+        if usable {
+            done.push((i, new.to_owned()));
+        } else {
+            eprintln!("consistency: {}: rewrite of text {} refused", group.word, entry.id);
+        }
+    }
+    if done.is_empty() {
+        return Ok(Outcome::Unusable("nothing to rewrite".into()));
+    }
+
+    // The old forms: the last word of each way the texts rendered it, other than the new one.
+    let wrong: Vec<String> = group
+        .variants
+        .iter()
+        .filter_map(|v| v.rsplit(' ').next())
+        .filter(|v| *v != "-" && !v.eq_ignore_ascii_case(&term))
+        .map(str::to_owned)
+        .collect();
+    let mut set = false;
+    if !options.dry_run {
+        let now = now_ms();
+        for (i, new) in &done {
+            let entry = &entries[*i];
+            con.execute(
+                "INSERT INTO history (id, hash, it, status, author, at, replaced_by, replaced_at)
+                 SELECT id, hash, it, status, author, at, ?3, ?4 FROM translations WHERE id = ?1 AND hash = ?2",
+                params![entry.id, entry.hash, AUTHOR, now],
+            )?;
+            // Only if it is still what the model saw, and still a machine translation.
+            let changed = con.execute(
+                "UPDATE translations SET it = ?3, status = 'auto', author = ?4, at = ?5, trust = 1,
+                     seq = (SELECT coalesce(max(seq), 0) FROM translations) + 1
+                 WHERE id = ?1 AND hash = ?2 AND it = ?6 AND trust <= 1",
+                params![entry.id, entry.hash, new, AUTHOR, now, entry.it],
+            )?;
+            if changed > 0 {
+                con.execute(
+                    "INSERT INTO consistency_log (id, hash, word, old, new, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![entry.id, entry.hash, group.word, entry.it, new, now],
+                )?;
+            }
+        }
+        let said = Term { en: group.word.clone(), it: term, wrong };
+        set = glossary::put(con, &said, AUTHOR, 1, now, 0)?;
+    }
+    Ok(Outcome::Rewrote { texts: done.len(), term: set })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    fn db() -> Connection {
+        let con = Connection::open_in_memory().unwrap();
+        con.execute_batch(include_str!("../../../server/schema.sql")).unwrap();
+        con.execute_batch(SCHEMA).unwrap();
+        con.execute_batch(
+            "INSERT INTO translations (id, hash, en, it, status, author, at, seq, trust) VALUES
+               (1, '0000000000000001', 'Seraph Guard', 'Guardia dei Serafini', 'manual', 'Ana', 1, 1, 3),
+               (2, '0000000000000002', 'Seraph Soldier', 'Soldato Serafino', 'auto', 'Bea', 1, 2, 0),
+               (3, '0000000000000003', 'Seraph %str1%', 'Serafino %str1%', 'auto', 'Bea', 1, 3, 1),
+               (4, '0000000000000004', 'Seraph Mage', 'Mago Serafino', 'manual', 'Cia', 1, 4, 2),
+               (5, '0000000000000005', 'Seraph Archer', 'Arciere Serafini', 'auto', 'Bea', 1, 5, 1);",
+        )
+        .unwrap();
+        con
+    }
+
+    fn it(con: &Connection, id: i64) -> String {
+        con.query_row("SELECT it FROM translations WHERE id = ?1", [id], |r| r.get(0)).unwrap()
+    }
+
+    /// A model that always gives `answer`.
+    fn model(answer: Value) -> impl Fn(&str, &str) -> Result<Value, Failure> {
+        move |_: &str, _: &str| Ok(answer.clone())
+    }
+
+    #[test]
+    fn rewrites_machine_translations_and_teaches_the_glossary() {
+        let con = db();
+        let ask = model(json!({
+            "consistent": false, "term": "Serafini",
+            "rewrites": [
+                {"n": 1, "it": "Soldato dei Serafini"},      // machine: rewritten
+                {"n": 2, "it": "Serafini"},                    // markup lost: refused
+                {"n": 3, "it": "Mago dei Serafini"},           // a hand correction: never
+                {"n": 0, "it": "Guardia dei Serafini ok"},     // a hand correction: never
+                {"n": 4, "it": "Arciere dei Serafini"},        // machine: rewritten
+                {"n": 9, "it": "Nowhere dei Serafini"},        // not a text of the group
+            ]
+        }));
+        let report = run(&con, &ask, &Options { max_groups: 5, dry_run: false }).unwrap();
+        assert_eq!((report.checked, report.rewritten, report.terms), (1, 2, 1), "{report:?}");
+        assert_eq!(it(&con, 2), "Soldato dei Serafini");
+        assert_eq!(it(&con, 5), "Arciere dei Serafini");
+        // Hand corrections, and the text whose markup would be lost, are as they were.
+        assert_eq!((it(&con, 1), it(&con, 3), it(&con, 4)), ("Guardia dei Serafini".into(), "Serafino %str1%".into(), "Mago Serafino".into()));
+
+        // The old text is in history and in the log; the row is the job's, with a new seq.
+        let old: String = con.query_row("SELECT it FROM history WHERE id = 2", [], |r| r.get(0)).unwrap();
+        assert_eq!(old, "Soldato Serafino");
+        let logged: i64 = con.query_row("SELECT count(*) FROM consistency_log", [], |r| r.get(0)).unwrap();
+        assert_eq!(logged, 2);
+        let (author, trust, seq): (String, i64, i64) =
+            con.query_row("SELECT author, trust, seq FROM translations WHERE id = 2", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+        assert_eq!((author.as_str(), trust), ("consistency", 1));
+        assert!(seq > 5);
+
+        // The form goes into the glossary with the old ones as wrong; a contributor can still change it.
+        let terms = glossary::all(&con).unwrap();
+        assert_eq!(terms, [Term { en: "seraph".into(), it: "Serafini".into(), wrong: vec!["serafino".into()] }]);
+        let trust: i64 = con.query_row("SELECT trust FROM glossary", [], |r| r.get(0)).unwrap();
+        assert_eq!(trust, 1);
+    }
+
+    #[test]
+    fn a_consistent_group_is_not_asked_again() {
+        let con = db();
+        let calls = RefCell::new(0);
+        let ask = |_: &str, _: &str| {
+            *calls.borrow_mut() += 1;
+            Ok(json!({"consistent": true}))
+        };
+        let options = Options { max_groups: 5, dry_run: false };
+        assert_eq!(run(&con, &ask, &options).unwrap().consistent, 1);
+        assert_eq!(run(&con, &ask, &options).unwrap().checked, 0);
+        assert_eq!(*calls.borrow(), 1);
+        // The texts change: its forms change, and it is looked at again.
+        con.execute("UPDATE translations SET it = 'Arciere Serafica' WHERE id = 5", []).unwrap();
+        assert_eq!(run(&con, &ask, &options).unwrap().checked, 1);
+    }
+
+    #[test]
+    fn the_translators_choice_beats_the_models_and_a_dry_run_changes_nothing() {
+        let con = db();
+        // A contributor decided "Serafim".
+        glossary::put(&con, &Term { en: "seraph".into(), it: "Serafim".into(), wrong: vec![] }, "Ana", 2, 1, 0).unwrap();
+        let ask = model(json!({
+            "consistent": false, "term": "Serafini",
+            "rewrites": [{"n": 1, "it": "Soldato dei Serafini"}, {"n": 4, "it": "Arciere dei Serafim"}]
+        }));
+        let dry = run(&con, &ask, &Options { max_groups: 5, dry_run: true }).unwrap();
+        assert_eq!(dry.rewritten, 1, "only the text with the translators' form");
+        assert_eq!(it(&con, 2), "Soldato Serafino");
+        let state: i64 = con.query_row("SELECT count(*) FROM consistency_state", [], |r| r.get(0)).unwrap();
+        assert_eq!(state, 0);
+        run(&con, &ask, &Options { max_groups: 5, dry_run: false }).unwrap();
+        assert_eq!(it(&con, 5), "Arciere dei Serafim");
+        assert_eq!(it(&con, 2), "Soldato Serafino");
+    }
+
+    #[test]
+    fn running_out_of_quota_stops_the_run() {
+        let con = db();
+        let ask = |_: &str, _: &str| Err(Failure::Stop("quota".into()));
+        let report = run(&con, &ask, &Options { max_groups: 5, dry_run: false }).unwrap();
+        assert_eq!(report.stopped.as_deref(), Some("quota"));
+        assert_eq!(it(&con, 2), "Soldato Serafino");
+    }
+}

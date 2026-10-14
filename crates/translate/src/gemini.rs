@@ -18,21 +18,58 @@ static AGENT: LazyLock<Agent> = LazyLock::new(|| {
         .into()
 });
 
+/// For `ask`: long answers (a rewrite of dozens of texts).
+static SLOW_AGENT: LazyLock<Agent> = LazyLock::new(|| {
+    Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(120)))
+        .http_status_as_error(false)
+        .build()
+        .into()
+});
+
 /// `model`: e.g. gemini-3.1-flash-lite. `neighbours` is not used: the batch itself is the
 /// context, as the texts that arrived together.
-pub fn translate(key: &str, model: &str, texts: &[&str]) -> Result<Vec<String>, Error> {
+pub fn translate(key: &str, model: &str, texts: &[&str], glossary: &str) -> Result<Vec<String>, Error> {
     let body = json!({
-        "systemInstruction": { "parts": [{ "text": format!("{LLM_INSTRUCTIONS}\nAnswer with a JSON array of the translations.") }] },
+        "systemInstruction": { "parts": [{ "text": format!("{LLM_INSTRUCTIONS}{glossary}\nAnswer with a JSON array of the translations.") }] },
         "contents": [{ "role": "user", "parts": [{ "text": Value::from(texts).to_string() }] }],
         "generationConfig": {
             "responseMimeType": "application/json",
             "responseSchema": { "type": "ARRAY", "items": { "type": "STRING" } },
         },
     });
-    let mut response = AGENT
+    let reply = generate(&AGENT, key, model, &body)?;
+    let text = answer(&reply);
+    let translations: Vec<String> = serde_json::from_str(&text).map_err(|_| {
+        let reason = reply["candidates"][0]["finishReason"].as_str().unwrap_or("?");
+        Error::BadRequest(format!("not a JSON array (finish reason {reason})"))
+    })?;
+    if translations.len() != texts.len() {
+        return Err(Error::BadRequest(format!("{} translations for {} texts", translations.len(), texts.len())));
+    }
+    Ok(translations)
+}
+
+/// A question to the model with a JSON answer of any shape (the consistency job in crates/server).
+pub fn ask(key: &str, model: &str, system: &str, user: &str) -> Result<Value, Error> {
+    let body = json!({
+        "systemInstruction": { "parts": [{ "text": system }] },
+        "contents": [{ "role": "user", "parts": [{ "text": user }] }],
+        "generationConfig": { "responseMimeType": "application/json" },
+    });
+    let reply = generate(&SLOW_AGENT, key, model, &body)?;
+    serde_json::from_str(&answer(&reply)).map_err(|_| {
+        let reason = reply["candidates"][0]["finishReason"].as_str().unwrap_or("?");
+        Error::BadRequest(format!("not JSON (finish reason {reason})"))
+    })
+}
+
+/// The model's reply to `body`, or why it did not answer.
+fn generate(agent: &Agent, key: &str, model: &str, body: &Value) -> Result<Value, Error> {
+    let mut response = agent
         .post(format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"))
         .header("x-goog-api-key", key)
-        .send_json(&body)
+        .send_json(body)
         .map_err(|e| Error::Other(e.to_string()))?;
 
     let status = response.status().as_u16();
@@ -53,23 +90,15 @@ pub fn translate(key: &str, model: &str, texts: &[&str]) -> Result<Vec<String>, 
             s => Error::Other(format!("HTTP {s} {message}")),
         });
     }
+    response.body_mut().read_json().map_err(|e| Error::Other(e.to_string()))
+}
 
-    let reply: Value = response.body_mut().read_json().map_err(|e| Error::Other(e.to_string()))?;
-    // The answer, without the model's thoughts if it shows them.
-    let text: String = reply["candidates"][0]["content"]["parts"]
+/// The answer, without the model's thoughts if it shows them.
+fn answer(reply: &Value) -> String {
+    reply["candidates"][0]["content"]["parts"]
         .as_array()
-        .map(|parts| {
-            parts.iter().filter(|p| p["thought"] != true).filter_map(|p| p["text"].as_str()).collect()
-        })
-        .unwrap_or_default();
-    let translations: Vec<String> = serde_json::from_str(&text).map_err(|_| {
-        let reason = reply["candidates"][0]["finishReason"].as_str().unwrap_or("?");
-        Error::BadRequest(format!("not a JSON array (finish reason {reason})"))
-    })?;
-    if translations.len() != texts.len() {
-        return Err(Error::BadRequest(format!("{} translations for {} texts", translations.len(), texts.len())));
-    }
-    Ok(translations)
+        .map(|parts| parts.iter().filter(|p| p["thought"] != true).filter_map(|p| p["text"].as_str()).collect())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -81,7 +110,7 @@ mod tests {
         let key = std::env::var("GW2IT_GEMINI_KEY").expect("GW2IT_GEMINI_KEY");
         let texts = ["Photonic Wall activated", "Deals <x id=\"1\"/> damage to foes &amp; allies."];
         let model = std::env::var("GW2IT_GEMINI_MODEL").unwrap_or_else(|_| "gemini-flash-lite-latest".into());
-        let out = super::translate(&key, &model, &texts).unwrap();
+        let out = super::translate(&key, &model, &texts, "").unwrap();
         println!("{out:?}");
         assert!(out[1].contains("<x id=\"1\"/>"), "{out:?}");
     }

@@ -21,6 +21,11 @@
 import SQL_HISTORY from "../sql/history.sql";
 import SQL_UPSERT from "../sql/upsert.sql";
 import SQL_PULL from "../sql/pull.sql";
+import SQL_SAME_HISTORY from "../sql/same_history.sql";
+import SQL_SAME from "../sql/same.sql";
+import SQL_GLOSSARY_PUT from "../sql/glossary_put.sql";
+import SQL_GLOSSARY_PULL from "../sql/glossary_pull.sql";
+import { merge, termOf } from "./glossary.js";
 
 /** Rows accepted in one /sync: the addon sends at most this many. */
 const PUSH_MAX = 200;
@@ -29,6 +34,9 @@ const PULL_MAX = 2000;
 /** Seconds the addon waits before the next /sync: raised here if the free plan runs short. */
 const NEXT_S = 120;
 const TEXT_MAX = 4000;
+/** Terms of the glossary accepted in one /sync, and returned by one. */
+const TERMS_PUSH_MAX = 50;
+const TERMS_PULL_MAX = 500;
 
 export default {
   async fetch(request, env) {
@@ -120,8 +128,9 @@ function valid(row) {
 }
 
 /**
- * POST /sync {since, rows: [[id, hash, en, it, status]...]}
- *   -> {rows: [[id, hash, en, it, status, author, seq]...], seq, more, next_s, accepted}
+ * POST /sync {since, rows: [[id, hash, en, it, status]...], gsince, glossary: [[en, it, [wrong...]]...]}
+ *   -> {rows: [[id, hash, en, it, status, author, seq]...], seq, more, next_s, accepted,
+ *       glossary: [[en, it, [wrong...], author, seq]...], gseq, gmore}
  */
 async function sync(request, env) {
   const { name, contributor: level } = await user(request, env);
@@ -145,12 +154,61 @@ async function sync(request, env) {
     await env.DB.batch([
       env.DB.prepare(SQL_HISTORY).bind(json, name, now),
       env.DB.prepare(SQL_UPSERT).bind(json, name, now, floor(env)),
+      env.DB.prepare(SQL_SAME_HISTORY).bind(json, name, now),
+      env.DB.prepare(SQL_SAME).bind(json, name, now, floor(env)),
     ]);
   }
 
   const results = await env.DB.prepare(SQL_PULL).bind(since, PULL_MAX).raw();
   const seq = results.length > 0 ? results[results.length - 1][6] : since;
-  return reply({ rows: results, seq, more: results.length === PULL_MAX, next_s: NEXT_S, accepted: rows.length });
+
+  // The glossary: the contributors' terms in, everyone's updates out.
+  const sentTerms = Array.isArray(input.glossary) ? input.glossary : [];
+  if (sentTerms.length > TERMS_PUSH_MAX) throw new HttpError(413, `at most ${TERMS_PUSH_MAX} terms`);
+  if (level >= 1) await putTerms(env, sentTerms.map(termOf).filter(Boolean), name, level >= 2 ? 3 : 2);
+  const gsince = Number.isSafeInteger(input.gsince) && input.gsince > 0 ? input.gsince : 0;
+  const terms = (await env.DB.prepare(SQL_GLOSSARY_PULL).bind(gsince, TERMS_PULL_MAX).raw()).map(
+    ([en, it, wrong, author, termSeq]) => [en, it, JSON.parse(wrong), author, termSeq],
+  );
+  return reply({
+    rows: results,
+    seq,
+    more: results.length === PULL_MAX,
+    next_s: NEXT_S,
+    accepted: rows.length,
+    glossary: terms,
+    gseq: terms.length > 0 ? terms[terms.length - 1][4] : gsince,
+    gmore: terms.length === TERMS_PULL_MAX,
+  });
+}
+
+/**
+ * Says each term with the voice of `trust` (2 contributor, 3 owner) and stores what comes out of
+ * merging it with what is there (merge in glossary.js, the same as the addon's).
+ */
+async function putTerms(env, terms, author, trust) {
+  if (terms.length === 0) return;
+  const found = await env.DB.prepare(
+    "SELECT en, it, wrong, trust FROM glossary WHERE en IN (SELECT value FROM json_each(?1))",
+  )
+    .bind(JSON.stringify(terms.map((t) => t.en)))
+    .all();
+  const current = new Map(found.results.map((r) => [r.en, { term: { en: r.en, it: r.it, wrong: JSON.parse(r.wrong) }, trust: r.trust }]));
+  const statements = [];
+  const now = Date.now();
+  for (const incoming of terms) {
+    const before = current.get(incoming.en) ?? null;
+    let term = merge(before, incoming, trust);
+    // The same said by a stronger voice: now it is theirs.
+    if (!term && before && trust > before.trust) term = before.term;
+    if (!term) continue;
+    current.set(term.en, { term, trust });
+    statements.push(
+      env.DB.prepare(SQL_GLOSSARY_PUT).bind(term.en, term.it, JSON.stringify(term.wrong), author, now, trust, floor(env)),
+    );
+  }
+  // Statements of one batch run one after the other: each seq is above the one before.
+  if (statements.length > 0) await env.DB.batch(statements);
 }
 
 function floor(env) {
@@ -173,20 +231,22 @@ const REPLICA_MAX = 300;
  *     [id, hash, en, it, status, author, at, seq, trust]
  *   users registered here since `since` (unix ms): [token_hash, name, created, banned, contributor]
  *   history (only what was written here: the main server's is not copied): every row.
+ *   glossary: the terms written here (seq >= SEQ_FLOOR): [en, it, wrong (JSON), author, at, seq, trust]
  */
 async function replicaExport(request, env) {
   const input = await replica(request, env);
   const after = Math.max(Number.isSafeInteger(input.after) ? input.after : 0, floor(env) - 1);
   const since = Number.isSafeInteger(input.since) ? input.since : 0;
-  const [translations, users, history] = await env.DB.batch([
+  const [translations, users, history, terms] = await env.DB.batch([
     env.DB.prepare(
       "SELECT id, hash, en, it, status, author, at, seq, trust FROM translations WHERE seq > ?1 ORDER BY seq LIMIT ?2",
     ).bind(after, REPLICA_MAX),
     env.DB.prepare("SELECT token_hash, name, created, banned, contributor FROM users WHERE created >= ?1").bind(since),
     env.DB.prepare("SELECT id, hash, it, status, author, at, replaced_by, replaced_at FROM history"),
+    env.DB.prepare("SELECT en, it, wrong, author, at, seq, trust FROM glossary WHERE seq >= ?1").bind(floor(env)),
   ]);
   const rows = (r) => r.results.map((o) => Object.values(o));
-  return reply({ translations: rows(translations), users: rows(users), history: rows(history) });
+  return reply({ translations: rows(translations), users: rows(users), history: rows(history), glossary: rows(terms) });
 }
 
 /**
@@ -199,11 +259,26 @@ async function replicaImport(request, env) {
   const input = await replica(request, env);
   const translations = Array.isArray(input.translations) ? input.translations : [];
   const users = Array.isArray(input.users) ? input.users : [];
-  if (translations.length > REPLICA_MAX || users.length > 5000) throw new HttpError(413, "too many rows");
+  const terms = Array.isArray(input.glossary) ? input.glossary : [];
+  if (translations.length > REPLICA_MAX || users.length > 5000 || terms.length > REPLICA_MAX) {
+    throw new HttpError(413, "too many rows");
+  }
   const statements = [];
   if (input.clear === true) {
     statements.push(env.DB.prepare("DELETE FROM translations WHERE seq >= ?1").bind(floor(env)));
     statements.push(env.DB.prepare("DELETE FROM history"));
+    statements.push(env.DB.prepare("DELETE FROM glossary WHERE seq >= ?1").bind(floor(env)));
+  }
+  if (terms.length > 0) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT OR REPLACE INTO glossary (en, it, wrong, author, at, seq, trust)
+         SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'),
+                json_extract(value, '$[3]'), json_extract(value, '$[4]'), json_extract(value, '$[5]'),
+                json_extract(value, '$[6]')
+         FROM json_each(?1)`,
+      ).bind(JSON.stringify(terms)),
+    );
   }
   if (translations.length > 0) {
     statements.push(
@@ -227,5 +302,5 @@ async function replicaImport(request, env) {
     );
   }
   if (statements.length > 0) await env.DB.batch(statements);
-  return reply({ translations: translations.length, users: users.length });
+  return reply({ translations: translations.length, users: users.length, glossary: terms.length });
 }

@@ -12,7 +12,7 @@ use rusqlite::params;
 use serde_json::{Value, json};
 use tiny_http::Request;
 
-use crate::{App, HttpError, body, client, limit, now_ms, sign::sign, user};
+use crate::{App, HttpError, body, client, glossary, limit, now_ms, sign::sign, user};
 
 /// Characters a player can have translated per day (UTC).
 const DAILY_CHARS: i64 = 30_000;
@@ -86,13 +86,14 @@ pub fn handle(app: &App, request: &mut Request) -> Result<Value, HttpError> {
         }
     }
 
-    let translated = app.translators.translate(&texts, &neighbours).map_err(|e| {
+    let terms = glossary::all(&app.db.lock().unwrap())?;
+    let translated = app.translators.translate(&texts, &neighbours, &terms).map_err(|e| {
         eprintln!("translate: {e}");
         match e {
             Error::QuotaExceeded => HttpError(456, "quota exceeded"),
             Error::TooManyRequests => HttpError(429, "too many requests"),
             Error::BadRequest(_) => HttpError(400, "texts refused"),
-            Error::Forbidden | Error::Other(_) | Error::Paused => HttpError(503, "translators unavailable"),
+            Error::Forbidden | Error::Other(_) | Error::Paused | Error::Unsupported => HttpError(503, "translators unavailable"),
         }
     })?;
     if translated.by != "deepl" {
@@ -109,7 +110,12 @@ pub fn handle(app: &App, request: &mut Request) -> Result<Value, HttpError> {
          ON CONFLICT (day, ip) DO UPDATE SET chars = chars + excluded.chars",
         params![today(), ip, chars],
     )?;
+    // What the translators still get wrong is repaired here, before the proof: the answer the server
+    // signs is the corrected one, and that is what the addon makes the text from (sign.rs).
+    // The XML of `sent` has the English words in it, which is all `fix` looks at.
+    let answers: Vec<String> =
+        texts.iter().zip(&translated.texts).map(|(sent, answered)| gw2it_text::glossary::fix(sent, answered, &terms)).collect();
     // The proof of each text, for /sync (sign.rs).
-    let signatures: Vec<String> = texts.iter().zip(&translated.texts).map(|(sent, answered)| sign(&app.secret, sent, answered)).collect();
-    Ok(json!({ "translations": translated.texts, "by": translated.by, "signatures": signatures }))
+    let signatures: Vec<String> = texts.iter().zip(&answers).map(|(sent, answered)| sign(&app.secret, sent, answered)).collect();
+    Ok(json!({ "translations": answers, "by": translated.by, "signatures": signatures }))
 }

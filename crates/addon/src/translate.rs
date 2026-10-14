@@ -17,6 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use gw2it_text::glossary;
 use gw2it_translate::{Chain, Engine, Error, deepl};
 
 use crate::{
@@ -144,6 +145,13 @@ impl Worker {
         if self.known.contains(&key) || store::lookup(job.id, job.hash).is_some() {
             return;
         }
+        // The same English under another ID: its translation, without asking for one.
+        if !job.force
+            && let Some(it) = store::lookup_same(job.hash)
+        {
+            copy(&job, it, "copy".into(), None);
+            return;
+        }
         self.known.insert(key);
         let Some(prepared) = markup::prepare(&job.en) else {
             return; // nothing to translate: the game shows it as it is
@@ -157,7 +165,27 @@ impl Worker {
 
     fn translate_batch(&mut self, max: usize) {
         let n = self.queue.len().min(max);
-        let batch: Vec<Queued> = self.queue.drain(..n).collect();
+        let drained: Vec<Queued> = self.queue.drain(..n).collect();
+        // The same English twice in the batch is translated once (`same`: the other one, and the
+        // index of the first in `batch`); one translated since it was queued is copied.
+        let (mut batch, mut same) = (Vec::with_capacity(n), Vec::new());
+        for q in drained {
+            if !q.job.force
+                && let Some(it) = store::lookup_same(q.job.hash)
+            {
+                self.known.remove(&(q.job.id, q.job.hash));
+                copy(&q.job, it, "copy".into(), None);
+            } else if let Some(i) = batch.iter().position(|b: &Queued| b.job.hash == q.job.hash) {
+                same.push((q, i));
+            } else {
+                batch.push(q);
+            }
+        }
+        if batch.is_empty() {
+            SHARED.queued.store(self.queue.len() as u64, Ordering::Relaxed);
+            return;
+        }
+        let n = batch.len();
         let texts: Vec<&str> = batch.iter().map(|q| q.prepared.xml.as_str()).collect();
         let mut neighbours = String::new();
         for q in &batch {
@@ -169,23 +197,30 @@ impl Worker {
         }
 
         set_status(&format!("Traduco {n} testi..."));
-        match self.chain.translate(&texts, &neighbours) {
+        let terms = store::glossary();
+        match self.chain.translate(&texts, &neighbours, &terms) {
             Ok(translated) => {
                 let mut rejected = 0;
                 for (i, (q, xml)) in batch.iter().zip(&translated.texts).enumerate() {
                     let Job { id, hash, en, .. } = &q.job;
                     match q.prepared.restore(xml) {
                         Some(it) => {
-                            let it = plural::pluralize(en, &markup::fix_spacing(en, &it));
+                            // Before the plural marks: they are made from the corrected text.
+                            let it = glossary::fix(en, &markup::fix_spacing(en, &it), &terms);
+                            let it = plural::pluralize(en, &it);
                             pipe::send_text(*id, *hash, &it);
                             let proof = translated.signatures.get(i).map(|s| (s.clone(), xml.clone()));
+                            for (other, _) in same.iter().filter(|(_, first)| *first == i) {
+                                self.known.remove(&(other.job.id, other.job.hash));
+                                copy(&other.job, it.clone(), translated.by.clone(), proof.clone());
+                            }
                             store::save_translation(Translated { id: *id, hash: *hash, it, source: translated.by.clone(), proof });
                             self.known.remove(&(*id, *hash));
                         }
                         None => {
                             // Kept in `known`: not retried in this session.
                             log::warn!("translation of {id} by {} rejected (markup changed): {en:?} -> {xml:?}", translated.by);
-                            rejected += 1;
+                            rejected += 1 + same.iter().filter(|(_, first)| *first == i).count() as u64;
                         }
                     }
                 }
@@ -198,14 +233,14 @@ impl Worker {
                 for q in &batch {
                     log::warn!("  {}: {:?}", q.job.id, q.prepared.xml);
                 }
-                SHARED.rejected.fetch_add(n as u64, Ordering::Relaxed);
+                SHARED.rejected.fetch_add((n + same.len()) as u64, Ordering::Relaxed);
                 set_status(&format!("Richiesta rifiutata ({n} testi scartati): {e}"));
             }
             Err(e) => {
                 // Every translator failed or is paused: they are tried again when a pause ends.
                 set_status(&format!("Traduttori non disponibili: {e}"));
                 // Back at the front, in the same order.
-                for q in batch.into_iter().rev() {
+                for q in batch.into_iter().chain(same.into_iter().map(|(q, _)| q)).rev() {
                     self.queue.push_front(q);
                 }
             }
@@ -257,6 +292,12 @@ fn engines(config: &config::Config) -> Vec<Engine> {
         engines.push(Engine::Server { url: sync.server().to_owned(), token: sync.token.clone() });
     }
     engines
+}
+
+/// Gives `job` a translation made for the same English.
+fn copy(job: &Job, it: String, source: String, proof: Option<(String, String)>) {
+    pipe::send_text(job.id, job.hash, &it);
+    store::save_translation(Translated { id: job.id, hash: job.hash, it, source, proof });
 }
 
 fn set_status(s: &str) {

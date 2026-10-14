@@ -15,7 +15,9 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use ureq::Agent;
 
-use crate::{SQL_HISTORY, SQL_UPSERT, now_ms};
+use gw2it_text::glossary::Term;
+
+use crate::{SQL_HISTORY, SQL_SAME, SQL_SAME_HISTORY, SQL_UPSERT, glossary, now_ms};
 
 /// Rows per call: the spare accepts up to 300 in one D1 statement.
 const CHUNK: usize = 300;
@@ -35,7 +37,7 @@ pub fn run(mut con: Connection, to: &str, key: &str) -> Result<(), String> {
         .into();
 
     // 1. Back.
-    let (mut back, mut users_back, mut history_back) = (0, 0, 0);
+    let (mut back, mut users_back, mut history_back, mut glossary_back) = (0, 0, 0, 0);
     let mut after = 0i64;
     loop {
         let reply = post(&agent, to, key, "/replica/export", &json!({ "after": after, "since": sent_at - MARGIN_MS }))?;
@@ -69,6 +71,15 @@ pub fn run(mut con: Connection, to: &str, key: &str) -> Result<(), String> {
                 .map_err(db)?;
                 history_back += 1;
             }
+            // The terms written there: merged like any contributor's, with their authors and trust.
+            for g in list(&reply, "glossary") {
+                let wrong: Vec<String> = g[2].as_str().and_then(|w| serde_json::from_str(w).ok()).unwrap_or_default();
+                let term = Term { en: g[0].as_str().unwrap_or("").into(), it: g[1].as_str().unwrap_or("").into(), wrong };
+                if term.is_valid() {
+                    glossary::put(&tx, &term, g[3].as_str().unwrap_or("replica"), g[6].as_i64().unwrap_or(2), now_ms(), 0).map_err(db)?;
+                    glossary_back += 1;
+                }
+            }
         }
         if !rows.is_empty() {
             // [id, hash, en, it, status, author, trust]: the statements of /sync, with each row's
@@ -77,6 +88,8 @@ pub fn run(mut con: Connection, to: &str, key: &str) -> Result<(), String> {
             let now = now_ms();
             tx.execute(SQL_HISTORY, params![merged, "replica", now]).map_err(db)?;
             tx.execute(SQL_UPSERT, params![merged, "replica", now, 0]).map_err(db)?;
+            tx.execute(SQL_SAME_HISTORY, params![merged, "replica", now]).map_err(db)?;
+            tx.execute(SQL_SAME, params![merged, "replica", now, 0]).map_err(db)?;
             back += rows.len();
             after = rows.last().and_then(|r| r[7].as_i64()).unwrap_or(after);
         }
@@ -146,11 +159,33 @@ pub fn run(mut con: Connection, to: &str, key: &str) -> Result<(), String> {
             break;
         }
     }
+    // The whole glossary: a few hundred rows at most. The first call above has dropped the spare's own.
+    let terms: Vec<Value> = {
+        let mut stmt = con.prepare("SELECT en, it, wrong, author, at, seq, trust FROM glossary ORDER BY seq").map_err(db)?;
+        stmt.query_map([], |r| {
+            Ok(json!([
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?
+            ]))
+        })
+        .map_err(db)?
+        .collect::<rusqlite::Result<_>>()
+        .map_err(db)?
+    };
+    for chunk in terms.chunks(CHUNK) {
+        post(&agent, to, key, "/replica/import", &json!({ "clear": false, "glossary": chunk }))?;
+    }
     set_state(&con, "sent_at", started).map_err(db)?;
     println!(
-        "replicate: back {back} translations, {users_back} users, {history_back} history; \
-         forth {sent} translations (up to seq {last}), {} users",
-        users.len()
+        "replicate: back {back} translations, {users_back} users, {history_back} history, {glossary_back} terms; \
+         forth {sent} translations (up to seq {last}), {} users, {} terms",
+        users.len(),
+        terms.len()
     );
     Ok(())
 }

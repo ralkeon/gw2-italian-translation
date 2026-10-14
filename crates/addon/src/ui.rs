@@ -27,6 +27,8 @@ const RECENT_REFRESH: Duration = Duration::from_secs(2);
 
 struct State {
     query: String,
+    /// The whole text, not a part of it.
+    exact: bool,
     rows: Vec<Row>,
     pending: Option<Receiver<Vec<Row>>>,
     searched_at: Option<Instant>,
@@ -39,6 +41,7 @@ impl State {
     fn new() -> Self {
         Self {
             query: String::new(),
+            exact: false,
             rows: Vec::new(),
             pending: None,
             searched_at: None,
@@ -48,7 +51,7 @@ impl State {
     }
 
     fn search(&mut self) {
-        self.pending = Some(store::search(self.query.clone()));
+        self.pending = Some(store::search(self.query.clone(), self.exact));
         self.searched_at = Some(Instant::now());
     }
 
@@ -134,7 +137,11 @@ fn editor(ui: &Ui, state: &mut State, user: &str) {
             Err(TryRecvError::Empty) => {}
         }
     }
-    let changed = ui.input_text("Cerca (inglese, italiano o ID)", &mut state.query).build();
+    let mut changed = ui.input_text("Cerca (inglese, italiano o ID)", &mut state.query).build();
+    changed |= ui.checkbox("Esatta", &mut state.exact);
+    if ui.is_item_hovered() {
+        ui.tooltip_text("Solo i testi che sono esattamente questi (inglese o italiano),\nmaiuscole comprese, invece di quelli che li contengono.");
+    }
     let stale = state.query.trim().is_empty() && state.searched_at.is_none_or(|t| t.elapsed() >= RECENT_REFRESH);
     if (changed || stale || state.searched_at.is_none()) && state.pending.is_none() {
         state.search();
@@ -179,7 +186,7 @@ fn editor(ui: &Ui, state: &mut State, user: &str) {
     if mismatch.is_empty() && !empty {
         if ui.button("Salva") {
             let it = state.edit.clone();
-            store::save_manual(row.id, row.hash, it.clone(), user);
+            store::save_manual(row.id, row.hash, &row.en, it.clone(), user);
             update_row(state, row.id, row.hash, Some(it), Some("manual"));
         }
     } else {

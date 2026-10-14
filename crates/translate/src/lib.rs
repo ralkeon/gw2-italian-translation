@@ -17,6 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use gw2it_text::glossary::{self, Term};
 use serde_json::Value;
 
 /// Fixed context for every request: steers the translation, not translated nor billed.
@@ -40,6 +41,22 @@ in English.
 - Translate the same term the same way across the texts.
 ";
 
+/// For the language models: the terms of the glossary that are in `texts`, to add to the
+/// instructions. Empty if there are none. The machine translators (DeepL, Azure) cannot be
+/// told: what they get wrong is repaired in their answer (gw2it_text::glossary::fix).
+pub(crate) fn glossary_note(terms: &[Term], texts: &[&str]) -> String {
+    let found = glossary::relevant(terms, texts);
+    if found.is_empty() {
+        return String::new();
+    }
+    let list: Vec<String> = found.iter().map(|t| format!("{} = {}", t.en, t.it)).collect();
+    format!(
+        "\nGlossary, chosen by the translators of the game: translate these English words this way, in \
+         whatever form the sentence needs: {}.\n",
+        list.join("; ")
+    )
+}
+
 #[derive(Debug)]
 pub enum Error {
     /// 456: monthly character quota used up (DeepL), or today's requests (Gemini).
@@ -54,6 +71,8 @@ pub enum Error {
     Other(String),
     /// Every translator is paused after errors: nothing was sent.
     Paused,
+    /// The translator is not a language model: it cannot be asked questions.
+    Unsupported,
 }
 
 impl std::fmt::Display for Error {
@@ -65,6 +84,7 @@ impl std::fmt::Display for Error {
             Self::BadRequest(e) => write!(f, "richiesta rifiutata: {e}"),
             Self::Other(e) => f.write_str(e),
             Self::Paused => f.write_str("in pausa dopo un errore"),
+            Self::Unsupported => f.write_str("non è un modello linguistico"),
         }
     }
 }
@@ -147,23 +167,40 @@ impl Engine {
             (Error::Forbidden, Self::Server { .. }) => Duration::from_secs(60),
             // Until the key changes, which makes it another engine.
             (Error::Forbidden, _) => Duration::from_secs(24 * 3600),
-            (Error::BadRequest(_) | Error::Paused, _) => Duration::ZERO,
+            (Error::BadRequest(_) | Error::Paused | Error::Unsupported, _) => Duration::ZERO,
             (Error::Other(_), _) => Duration::from_secs(60),
         }
     }
 
     /// The texts, who made them and the server's signatures (only from the server).
-    fn translate(&self, texts: &[&str], neighbours: &str) -> Result<(Vec<String>, String, Vec<String>), Error> {
+    fn translate(
+        &self,
+        texts: &[&str],
+        neighbours: &str,
+        terms: &[Term],
+    ) -> Result<(Vec<String>, String, Vec<String>), Error> {
         match self {
             Self::Deepl { key } => deepl::translate(key, texts, neighbours).map(|t| (t, "deepl".into(), Vec::new())),
             Self::Azure { key, region } => azure::translate(key, region, texts).map(|t| (t, "azure".into(), Vec::new())),
-            Self::Gemini { key, model } => gemini::translate(key, model, texts).map(|t| (t, "gemini".into(), Vec::new())),
+            Self::Gemini { key, model } => gemini::translate(key, model, texts, &glossary_note(terms, texts)).map(|t| (t, "gemini".into(), Vec::new())),
             Self::OpenAi { url, key, model, .. } => {
-                openai::translate(url, key, model, texts).map(|t| (t, self.name(), Vec::new()))
+                openai::translate(url, key, model, texts, &glossary_note(terms, texts)).map(|t| (t, self.name(), Vec::new()))
             }
             Self::Server { url, token } => {
                 server::translate(url, token, texts, neighbours).map(|(t, by, s)| (t, format!("server:{by}"), s))
             }
+        }
+    }
+}
+
+impl Engine {
+    /// A question for the language models (Gemini, other services with OpenAI's API) with a JSON
+    /// answer. The machine translators cannot answer it: Unsupported.
+    fn ask(&self, system: &str, user: &str) -> Result<Value, Error> {
+        match self {
+            Self::Gemini { key, model } => gemini::ask(key, model, system, user),
+            Self::OpenAi { url, key, model, .. } => openai::ask(url, key, model, system, user),
+            Self::Deepl { .. } | Self::Azure { .. } | Self::Server { .. } => Err(Error::Unsupported),
         }
     }
 }
@@ -214,17 +251,48 @@ impl Chain {
 
     /// The first translator that is not paused and answers. A translator that refuses the texts
     /// (BadRequest) is not paused, but the next one gets them. The error is the last one met.
-    pub fn translate(&self, texts: &[&str], neighbours: &str) -> Result<Translated, Error> {
+    pub fn translate(&self, texts: &[&str], neighbours: &str, terms: &[Term]) -> Result<Translated, Error> {
         let mut last = Error::Paused;
         for slot in &self.slots {
             let now = Instant::now();
             if slot.paused_until.lock().unwrap().is_some_and(|t| now < t) {
                 continue;
             }
-            match slot.engine.translate(texts, neighbours) {
+            match slot.engine.translate(texts, neighbours, terms) {
                 Ok((texts, by, signatures)) => {
                     *slot.paused_until.lock().unwrap() = None;
                     return Ok(Translated { texts, by, signatures });
+                }
+                Err(e) => {
+                    let pause = slot.engine.pause(&e);
+                    log::warn!("{}: {e}; paused for {}s", slot.engine.name(), pause.as_secs());
+                    if !pause.is_zero() {
+                        *slot.paused_until.lock().unwrap() = Some(Instant::now() + pause);
+                    }
+                    last = e;
+                }
+            }
+        }
+        Err(last)
+    }
+
+    /// Asks the language models in order (same pauses as `translate`) and gives the first JSON
+    /// answer. Paused, out of quota or refused: the next one. Err(Unsupported) if there is none.
+    pub fn ask(&self, system: &str, user: &str) -> Result<Value, Error> {
+        let mut last = Error::Unsupported;
+        for slot in &self.slots {
+            if matches!(slot.engine, Engine::Deepl { .. } | Engine::Azure { .. } | Engine::Server { .. }) {
+                continue;
+            }
+            let now = Instant::now();
+            if slot.paused_until.lock().unwrap().is_some_and(|t| now < t) {
+                last = Error::Paused;
+                continue;
+            }
+            match slot.engine.ask(system, user) {
+                Ok(answer) => {
+                    *slot.paused_until.lock().unwrap() = None;
+                    return Ok(answer);
                 }
                 Err(e) => {
                     let pause = slot.engine.pause(&e);
