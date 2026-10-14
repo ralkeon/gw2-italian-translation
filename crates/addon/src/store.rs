@@ -33,8 +33,8 @@ pub struct Translated {
     pub id: u32,
     pub hash: u64,
     pub it: String,
-    /// Who made it, e.g. "deepl".
-    pub source: &'static str,
+    /// Who made it: "deepl", "gemini", "server:deepl"...
+    pub source: String,
 }
 
 /// A text as the editor shows it.
@@ -86,7 +86,7 @@ pub(crate) const SCHEMA: &str = "
         hash   INTEGER NOT NULL,      -- hash of the English it translates: a new English is a new row
         it     TEXT    NOT NULL,
         status TEXT    NOT NULL,      -- 'auto' (machine), 'manual' (never overwritten)
-        source TEXT    NOT NULL,      -- 'deepl', 'editor:<contributor>', 'external', 'cloud:<author>'
+        source TEXT    NOT NULL,      -- 'deepl', 'gemini', 'server:<translator>', 'editor:<contributor>', 'external', 'cloud:<author>'
         at     INTEGER NOT NULL,      -- unix ms of the last change
         PRIMARY KEY (id, hash)
     ) WITHOUT ROWID;

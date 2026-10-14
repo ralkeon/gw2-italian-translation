@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 gw2it-proto.workspace = true
+gw2it-translate.workspace = true
 log.workspace = true
 nexus = { git = "https://github.com/zerthox/nexus-rs", rev = "51bff5ab38ad11332316448b452ece1b773018cd", features = ["log", "log_filter"] }
 rusqlite = { version = "0.37", features = ["bundled"] }

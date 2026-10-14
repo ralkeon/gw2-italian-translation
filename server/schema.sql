@@ -33,5 +33,8 @@ CREATE TABLE IF NOT EXISTS users (
     token_hash TEXT PRIMARY KEY,
     name       TEXT    NOT NULL,
     created    INTEGER NOT NULL,
-    banned     INTEGER NOT NULL DEFAULT 0
+    banned     INTEGER NOT NULL DEFAULT 0,
+    -- May send hand corrections: the others' 'manual' rows are taken as 'auto'. Set by hand
+    -- (server/README.md). Older databases: ALTER TABLE users ADD COLUMN contributor ...
+    contributor INTEGER NOT NULL DEFAULT 0
 );

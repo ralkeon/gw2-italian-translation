@@ -5,14 +5,14 @@
 //! logic and the in-game UI live here.
 //!
 //! Every source text is saved in strings.db. A text with a saved translation gets it at once;
-//! the others are translated by DeepL in the background (with the player's key, or by the
-//! project's server) and pushed into the game when ready.
+//! the others are translated in the background (DeepL, Gemini when DeepL is used up, or the
+//! project's server for players without keys: translate.rs) and pushed into the game when ready.
 //! Translations are shared with the other players through a global database (sync.rs).
 
 mod config;
-mod deepl;
 mod install;
 mod markup;
+mod options;
 mod pipe;
 mod plural;
 mod state;
@@ -77,6 +77,7 @@ fn load() {
     sync::start(db);
 
     register_render(RenderType::Render, render!(ui::render)).revert_on_unload();
+    register_render(RenderType::OptionsRender, render!(options::render)).revert_on_unload();
     register_keybind_with_string(
         "GW2IT_TOGGLE_WINDOW",
         keybind_handler!(|_, is_release| {

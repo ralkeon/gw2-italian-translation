@@ -45,8 +45,9 @@ pub fn run(mut con: Connection, to: &str, key: &str) -> Result<(), String> {
             for u in list(&reply, "users") {
                 users_back += tx
                     .execute(
-                        "INSERT OR IGNORE INTO users (token_hash, name, created, banned) VALUES (?1, ?2, ?3, ?4)",
-                        params![u[0].as_str(), u[1].as_str(), u[2].as_i64(), u[3].as_i64()],
+                        "INSERT OR IGNORE INTO users (token_hash, name, created, banned, contributor)
+                         VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![u[0].as_str(), u[1].as_str(), u[2].as_i64(), u[3].as_i64(), u[4].as_i64().unwrap_or(0)],
                     )
                     .map_err(db)?;
             }
@@ -86,9 +87,15 @@ pub fn run(mut con: Connection, to: &str, key: &str) -> Result<(), String> {
 
     // 2. Forth.
     let users: Vec<Value> = {
-        let mut stmt = con.prepare("SELECT token_hash, name, created, banned FROM users").map_err(db)?;
+        let mut stmt = con.prepare("SELECT token_hash, name, created, banned, contributor FROM users").map_err(db)?;
         stmt.query_map([], |r| {
-            Ok(json!([r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?]))
+            Ok(json!([
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?
+            ]))
         })
         .map_err(db)?
         .collect::<rusqlite::Result<_>>()

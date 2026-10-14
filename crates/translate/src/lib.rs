@@ -1,0 +1,236 @@
+//! Translators of Italian Translation and the fallback between them, shared by the addon and the
+//! server: DeepL first, then Gemini, Azure Translator and other language models (any service with
+//! OpenAI's API) while the ones before are out of quota or do not answer, and in the addon last
+//! the project's server, for players without keys (or whose keys are used up).
+//!
+//! Every translator takes XML texts with `<x id="N"/>` placeholders (markup.rs in the addon) and
+//! gives them back in Italian, in the same order.
+
+pub mod azure;
+pub mod deepl;
+pub mod gemini;
+pub mod openai;
+pub mod server;
+
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
+
+use serde_json::Value;
+
+/// Fixed context for every request: steers the translation, not translated nor billed.
+pub const CONTEXT: &str = "Guild Wars 2, a fantasy MMORPG: in-game texts such as item, skill and \
+    title names, tooltips, achievements, dialogue and user interface labels.";
+
+/// For the language models (gemini.rs, openai.rs); each adds the JSON shape of its answer.
+pub(crate) const LLM_INSTRUCTIONS: &str = "You translate the texts of the game Guild Wars 2, a \
+fantasy MMORPG, from English to Italian: item, skill and title names, tooltips, achievements, \
+dialogue, interface labels. You get a JSON array of texts shown together on screen: use them as \
+context for each other. Give one Italian translation per text, in the same order.
+
+Rules:
+- The texts are XML fragments. Keep every <x id=\"N\"/> tag exactly as it is, once, where it \
+belongs in the Italian sentence: they stand for numbers, names, colours and line breaks. Keep \
+&amp; &lt; &gt; escaped.
+- Natural Italian, as in a video game: informal (tu) when talking to the player, short and \
+clear for interface labels, buttons and item names.
+- Names of characters, places, races and factions (Tyria, Lion's Arch, Inquest, Asura...) stay \
+in English.
+- Translate the same term the same way across the texts.
+";
+
+#[derive(Debug)]
+pub enum Error {
+    /// 456: monthly character quota used up (DeepL), or today's requests (Gemini).
+    QuotaExceeded,
+    /// 429: too many requests, retry later.
+    TooManyRequests,
+    /// 403: wrong key.
+    Forbidden,
+    /// 400: these texts were refused; retrying them with the same translator would fail again.
+    BadRequest(String),
+    /// Anything else: network, 5xx, unexpected answer.
+    Other(String),
+    /// Every translator is paused after errors: nothing was sent.
+    Paused,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::QuotaExceeded => f.write_str("quota esaurita"),
+            Self::TooManyRequests => f.write_str("troppe richieste, riprovo tra poco"),
+            Self::Forbidden => f.write_str("chiave API non valida"),
+            Self::BadRequest(e) => write!(f, "richiesta rifiutata: {e}"),
+            Self::Other(e) => f.write_str(e),
+            Self::Paused => f.write_str("in pausa dopo un errore"),
+        }
+    }
+}
+
+/// DeepL's status codes, which the server passes on as they are.
+pub(crate) fn check(response: &mut ureq::http::Response<ureq::Body>) -> Result<(), Error> {
+    let status = response.status().as_u16();
+    if status == 200 {
+        return Ok(());
+    }
+    let body = response.body_mut().read_to_string().unwrap_or_default();
+    let message = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v["message"].as_str().or(v["error"].as_str()).map(str::to_owned))
+        .unwrap_or(body);
+    Err(match status {
+        456 => Error::QuotaExceeded,
+        429 => Error::TooManyRequests,
+        401 | 403 => Error::Forbidden,
+        400 => Error::BadRequest(message),
+        s => Error::Other(format!("HTTP {s} {message}")),
+    })
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum Engine {
+    Deepl { key: String },
+    Azure { key: String, region: String },
+    Gemini { key: String, model: String },
+    /// A service with OpenAI's API (openai.rs).
+    OpenAi { name: String, url: String, key: String, model: String },
+    /// The project's server, with the installation's sync token.
+    Server { url: String, token: String },
+}
+
+impl Engine {
+    /// As saved with the translation: "deepl", "gemini", "groq"...
+    pub fn name(&self) -> String {
+        match self {
+            Self::Deepl { .. } => "deepl".into(),
+            Self::Azure { .. } => "azure".into(),
+            Self::Gemini { .. } => "gemini".into(),
+            Self::OpenAi { name, .. } => name.to_lowercase(),
+            Self::Server { .. } => "server".into(),
+        }
+    }
+
+    /// One entry of the server's translators.json:
+    /// {"type": "deepl" | "azure" | "gemini" | "openai", "key", "region", "model", "name", "url"}.
+    /// Gemini's "model" may list several, separated by commas: one engine each.
+    pub fn from_json(v: &Value) -> Result<Vec<Self>, String> {
+        let field = |name: &str| v[name].as_str().map(str::trim).unwrap_or("").to_owned();
+        let key = field("key");
+        if key.is_empty() {
+            return Err(format!("no key in {v}"));
+        }
+        Ok(match field("type").as_str() {
+            "deepl" => vec![Self::Deepl { key }],
+            "azure" => vec![Self::Azure { key, region: field("region") }],
+            "gemini" => field("model")
+                .split(',')
+                .map(str::trim)
+                .filter(|m| !m.is_empty())
+                .map(|model| Self::Gemini { key: key.clone(), model: model.to_owned() })
+                .collect(),
+            "openai" if !field("url").is_empty() && !field("model").is_empty() => {
+                vec![Self::OpenAi { name: field("name"), url: field("url"), key, model: field("model") }]
+            }
+            _ => return Err(format!("unknown or incomplete translator {v}")),
+        })
+    }
+
+    /// How long to leave it alone after an error.
+    fn pause(&self, e: &Error) -> Duration {
+        match (e, self) {
+            (Error::QuotaExceeded, _) => Duration::from_secs(3600),
+            (Error::TooManyRequests, Self::Gemini { .. } | Self::OpenAi { .. }) => Duration::from_secs(60),
+            (Error::TooManyRequests, _) => Duration::from_secs(10),
+            // The server's 401: the addon's sync gets a new token.
+            (Error::Forbidden, Self::Server { .. }) => Duration::from_secs(60),
+            // Until the key changes, which makes it another engine.
+            (Error::Forbidden, _) => Duration::from_secs(24 * 3600),
+            (Error::BadRequest(_) | Error::Paused, _) => Duration::ZERO,
+            (Error::Other(_), _) => Duration::from_secs(60),
+        }
+    }
+
+    fn translate(&self, texts: &[&str], neighbours: &str) -> Result<(Vec<String>, String), Error> {
+        match self {
+            Self::Deepl { key } => deepl::translate(key, texts, neighbours).map(|t| (t, "deepl".into())),
+            Self::Azure { key, region } => azure::translate(key, region, texts).map(|t| (t, "azure".into())),
+            Self::Gemini { key, model } => gemini::translate(key, model, texts).map(|t| (t, "gemini".into())),
+            Self::OpenAi { url, key, model, .. } => openai::translate(url, key, model, texts).map(|t| (t, self.name())),
+            Self::Server { url, token } => {
+                server::translate(url, token, texts, neighbours).map(|(t, by)| (t, format!("server:{by}")))
+            }
+        }
+    }
+}
+
+struct Slot {
+    engine: Engine,
+    paused_until: Mutex<Option<Instant>>,
+}
+
+/// Translators in order of preference. Each one that fails is paused for a while (an hour when
+/// out of quota) and the next one takes over; when its pause ends, it is tried first again.
+/// Usable from several threads at once (the server): no lock is held during a request.
+#[derive(Default)]
+pub struct Chain {
+    slots: Vec<Slot>,
+}
+
+pub struct Translated {
+    pub texts: Vec<String>,
+    /// "deepl", "gemini", "server:deepl"...
+    pub by: String,
+}
+
+impl Chain {
+    /// Sets the translators, keeping the pauses of those that did not change.
+    pub fn set(&mut self, engines: Vec<Engine>) {
+        let mut old = std::mem::take(&mut self.slots);
+        self.slots = engines
+            .into_iter()
+            .map(|engine| match old.iter().position(|s| s.engine == engine) {
+                Some(i) => old.swap_remove(i),
+                None => Slot { engine, paused_until: Mutex::new(None) },
+            })
+            .collect();
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
+    /// True if a translator can be tried now.
+    pub fn ready(&self) -> bool {
+        let now = Instant::now();
+        self.slots.iter().any(|s| s.paused_until.lock().unwrap().is_none_or(|t| now >= t))
+    }
+
+    /// The first translator that is not paused and answers. A translator that refuses the texts
+    /// (BadRequest) is not paused, but the next one gets them. The error is the last one met.
+    pub fn translate(&self, texts: &[&str], neighbours: &str) -> Result<Translated, Error> {
+        let mut last = Error::Paused;
+        for slot in &self.slots {
+            let now = Instant::now();
+            if slot.paused_until.lock().unwrap().is_some_and(|t| now < t) {
+                continue;
+            }
+            match slot.engine.translate(texts, neighbours) {
+                Ok((texts, by)) => {
+                    *slot.paused_until.lock().unwrap() = None;
+                    return Ok(Translated { texts, by });
+                }
+                Err(e) => {
+                    let pause = slot.engine.pause(&e);
+                    log::warn!("{}: {e}; paused for {}s", slot.engine.name(), pause.as_secs());
+                    if !pause.is_zero() {
+                        *slot.paused_until.lock().unwrap() = Some(Instant::now() + pause);
+                    }
+                    last = e;
+                }
+            }
+        }
+        Err(last)
+    }
+}

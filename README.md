@@ -23,15 +23,15 @@ tra i moduli di Text Translator). La finestra dell'addon si apre con `ALT+SHIFT+
 
 ## Come funziona
 
-- I testi arrivano dal gioco tramite Text Translator e vengono tradotti con DeepL: dal server del
-  progetto, oppure con la tua chiave DeepL se la inserisci in **Chiavi API** (basta il piano
-  gratuito, e alleggerisci il server).
+- I testi arrivano dal gioco tramite Text Translator e vengono tradotti dal server del progetto,
+  oppure con le tue chiavi, se le inserisci nelle opzioni dell'addon in Nexus (tutte facoltative,
+  con piani gratuiti): DeepL, poi Gemini, Azure Translator e altri modelli linguistici (Groq,
+  Cerebras, OpenRouter, Mistral) quando i precedenti finiscono la quota o non rispondono.
 - Le traduzioni restano sul tuo PC (`strings.db`): ogni testo si traduce una volta sola.
 - Ogni 2 minuti le traduzioni nuove vanno su un database globale e arrivano quelle degli altri
   giocatori: chi trova per primo un testo lo traduce per tutti, e le correzioni a mano hanno la
   precedenza su quelle automatiche (vedi [`server/`](server/)).
 - I plurali degli oggetti sono generati nella sintassi del gioco (`Cuore[pl:"Cuori"] di torrone`).
-- I collaboratori hanno un editor in gioco per correggere le traduzioni.
 
 I dati stanno in `Guild Wars 2/addons/italian_translation/`:
 
@@ -40,16 +40,6 @@ I dati stanno in `Guild Wars 2/addons/italian_translation/`:
 | `config.toml` | impostazioni, chiavi API e chiavi del database globale (`[sync]`, `enabled = false` per spegnerlo) |
 | `strings.db` | testi del gioco e traduzioni |
 | `map_it.db` | gli stessi testi nel formato di Local Translator, da scambiare tra collaboratori |
-| `contributor.json` | solo per i collaboratori: `{"user": "Nome"}` attiva l'editor |
-
-## Editor (collaboratori)
-
-Con `contributor.json` la finestra mostra l'editor: cerca un testo (per ID, inglese o italiano),
-correggilo e salva. Le correzioni a mano non vengono mai sovrascritte e arrivano subito in gioco.
-Il salvataggio è bloccato se mancano o avanzano token del gioco (`%str1%`, `%num1%`, `<c=...>`).
-
-Plurali: subito dopo ogni parola che cambia scrivi la forma plurale, come fa il gioco:
-`Broken Bottle[s]` → `Flacone[pl:"Flaconi"] rotto[pl:"rotti"]`.
 
 ## Compilare
 

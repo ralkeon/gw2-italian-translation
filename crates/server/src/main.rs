@@ -3,7 +3,8 @@
 //!
 //! Plain HTTP on a local address: a reverse proxy (Apache, Caddy...) in front gives it HTTPS.
 //!
-//! gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790] [--deepl-key-file <file>]   (see translate.rs)
+//! gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
+//!              [--translators translators.json]   (see translate.rs)
 //! gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>   (see replicate.rs)
 
 use std::{
@@ -14,6 +15,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use gw2it_translate::{Chain, Engine};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -41,8 +43,8 @@ const THREADS: usize = 4;
 
 struct App {
     db: Mutex<Connection>,
-    /// For /translate: none, no translations.
-    deepl_key: Option<String>,
+    /// For /translate, in order of preference: none, no translations.
+    translators: gw2it_translate::Chain,
     /// key -> (start of the current minute, requests in it)
     rate: Mutex<HashMap<String, (Instant, u32)>>,
 }
@@ -56,7 +58,8 @@ impl From<rusqlite::Error> for HttpError {
     }
 }
 
-const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790] [--deepl-key-file <file>]
+const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
+                    [--translators translators.json]
        gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>";
 
 fn main() {
@@ -69,7 +72,7 @@ fn main() {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--deepl-key-file"), Some(v)) => {
+            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators"), Some(v)) => {
                 options.insert(name.to_owned(), v);
             }
             _ => {
@@ -100,13 +103,11 @@ fn main() {
         return;
     }
     let listen = options.remove("--listen").unwrap_or_else(|| "127.0.0.1:8790".into());
-    let deepl_key = options.remove("--deepl-key-file").map(|file| {
-        let key = std::fs::read_to_string(&file).unwrap_or_else(|e| {
-            eprintln!("cannot read {file}: {e}");
-            std::process::exit(1);
-        });
-        key.trim().to_owned()
-    });
+    let translators_file = options.remove("--translators");
+    let engines = translators_file.as_deref().map(translators).unwrap_or_default();
+    let names: Vec<String> = engines.iter().map(Engine::name).collect();
+    let mut translators = Chain::default();
+    translators.set(engines);
 
     let con = open(&db).unwrap_or_else(|e| {
         eprintln!("cannot open {db}: {e}");
@@ -116,9 +117,9 @@ fn main() {
         eprintln!("cannot listen on {listen}: {e}");
         std::process::exit(1);
     }));
-    eprintln!("gw2it-server: {db} on http://{listen}, translations {}", if deepl_key.is_some() { "on" } else { "off" });
+    eprintln!("gw2it-server: {db} on http://{listen}, translators: {}", if names.is_empty() { "none".into() } else { names.join(", ") });
 
-    let app = Arc::new(App { db: Mutex::new(con), deepl_key, rate: Mutex::new(HashMap::new()) });
+    let app = Arc::new(App { db: Mutex::new(con), translators, rate: Mutex::new(HashMap::new()) });
     let workers: Vec<_> = (0..THREADS)
         .map(|_| {
             let (server, app) = (server.clone(), app.clone());
@@ -134,11 +135,33 @@ fn main() {
     }
 }
 
+/// translators.json: the translators of /translate in order of preference, with their keys
+/// (Engine::from_json in gw2it-translate). Readable by this user only.
+fn translators(file: &str) -> Vec<Engine> {
+    let fail = |e: String| -> ! {
+        eprintln!("{file}: {e}");
+        std::process::exit(1);
+    };
+    let text = std::fs::read_to_string(file).unwrap_or_else(|e| fail(e.to_string()));
+    let list: Value = serde_json::from_str(&text).unwrap_or_else(|e| fail(e.to_string()));
+    let mut engines = Vec::new();
+    for entry in list.as_array().unwrap_or_else(|| fail("not a JSON array".into())) {
+        engines.extend(Engine::from_json(entry).unwrap_or_else(|e| fail(e)));
+    }
+    engines
+}
+
 fn open(path: &str) -> rusqlite::Result<Connection> {
     let con = Connection::open(path)?;
     con.busy_timeout(Duration::from_secs(5))?;
     con.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
     con.execute_batch(SCHEMA)?;
+    // Databases from before users.contributor.
+    let has_contributor: bool =
+        con.query_row("SELECT count(*) FROM pragma_table_info('users') WHERE name = 'contributor'", [], |r| r.get(0))?;
+    if !has_contributor {
+        con.execute_batch("ALTER TABLE users ADD COLUMN contributor INTEGER NOT NULL DEFAULT 0;")?;
+    }
     con.execute_batch(translate::SCHEMA)?;
     Ok(con)
 }
@@ -239,32 +262,39 @@ fn valid(row: &Value) -> Option<Value> {
     Some(json!([id, hash, en, it, status]))
 }
 
-/// The installation behind the request's token: (token hash, name).
-fn user(app: &App, request: &Request) -> Result<(String, String), HttpError> {
+/// The installation behind the request's token.
+struct User {
+    token_hash: String,
+    name: String,
+    /// May send hand corrections.
+    contributor: bool,
+}
+
+fn user(app: &App, request: &Request) -> Result<User, HttpError> {
     let token = header(request, "Authorization")
         .and_then(|h| h.strip_prefix("Bearer ").map(|t| t.trim().to_owned()))
         .filter(|t| !t.is_empty())
         .ok_or(HttpError(401, "missing token"))?;
     let token_hash = sha256(&token);
-    let user: Option<(String, bool)> = app
+    let user: Option<(String, bool, bool)> = app
         .db
         .lock()
         .unwrap()
-        .query_row("SELECT name, banned FROM users WHERE token_hash = ?1", [&token_hash], |r| {
-            Ok((r.get(0)?, r.get(1)?))
+        .query_row("SELECT name, banned, contributor FROM users WHERE token_hash = ?1", [&token_hash], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .optional()?;
     match user {
         None => Err(HttpError(401, "unknown token")),
-        Some((_, true)) => Err(HttpError(403, "banned")),
-        Some((name, false)) => Ok((token_hash, name)),
+        Some((_, true, _)) => Err(HttpError(403, "banned")),
+        Some((name, false, contributor)) => Ok(User { token_hash, name, contributor }),
     }
 }
 
 /// POST /sync {since, rows: [[id, hash, en, it, status]...]}
 ///   -> {rows: [[id, hash, en, it, status, author, seq]...], seq, more, next_s, accepted}
 fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
-    let (token_hash, name) = user(app, request)?;
+    let User { token_hash, name, contributor } = user(app, request)?;
     limit(app, format!("sync:{token_hash}"), RATE)?;
     let input = body(request)?;
     let mut db = app.db.lock().unwrap();
@@ -274,7 +304,13 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
     if sent.len() > PUSH_MAX {
         return Err(HttpError(413, "too many rows"));
     }
-    let rows: Vec<Value> = sent.iter().filter_map(valid).collect();
+    let mut rows: Vec<Value> = sent.iter().filter_map(valid).collect();
+    if !contributor {
+        // Anyone can write contributor.json: only the contributors' hand corrections count as such.
+        for row in &mut rows {
+            row[4] = "auto".into();
+        }
+    }
     if !rows.is_empty() {
         let json = Value::Array(rows.clone()).to_string();
         let now = now_ms();

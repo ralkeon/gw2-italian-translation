@@ -5,7 +5,7 @@ After=network.target
 [Service]
 User=ralkeon
 WorkingDirectory=/home/ralkeon/gw2it-sync
-ExecStart=/home/ralkeon/gw2it-sync/gw2it-server --db /home/ralkeon/gw2it-sync/data/gw2it.db --listen 127.0.0.1:8790 --deepl-key-file /home/ralkeon/gw2it-sync/deepl.key
+ExecStart=/home/ralkeon/gw2it-sync/gw2it-server --db /home/ralkeon/gw2it-sync/data/gw2it.db --listen 127.0.0.1:8790 --translators /home/ralkeon/gw2it-sync/translators.json
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true

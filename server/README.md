@@ -32,10 +32,13 @@ interchangeable versions with the same API, schema (schema.sql) and statements (
   Sends up to 200 rows, gets back what changed after `since` (up to 2000; `more` if there is more).
 
 - `POST /translate {"texts": [xml...], "neighbours"}` with the same token -> `{"translations": [xml...]}`
-  (crates/server only, with `--deepl-key-file`): DeepL with the server's key, for players without
-  one. Up to 50 texts; 30,000 characters per player per day (table `usage`); errors keep DeepL's
+  (crates/server only, with `--translators translators.json`): the server's translators, for players
+  without keys: DeepL, then the next ones while it is out of quota or down. Up to 50 texts; 30,000 characters per player per day (table `usage`); errors keep DeepL's
   codes (456 quota or daily limit, 429, 400). On the spare it is missing: the addon waits for the
   main server.
+
+Only contributors (`users.contributor = 1`, set by hand) send `manual` rows: anyone can turn the
+addon's editor on, so the others' are stored as `auto`.
 
 Merge: a `manual` row replaces anything (the old text goes to `history`); an `auto` row is only
 stored for a text that has none. `next_s` is the wait the addon keeps between syncs: raise
@@ -50,8 +53,17 @@ cp target/release/gw2it-server ~/gw2it-sync/
 sudo sh ~/gw2it-sync/install-root.sh   # crates/server/deploy: systemd service + Apache proxy on /gw2it/
 ```
 
-Data in `~/gw2it-sync/data/gw2it.db`; logs: `journalctl -u gw2it-sync`. The DeepL key for
-/translate: `~/gw2it-sync/deepl.key` (mode 600).
+Data in `~/gw2it-sync/data/gw2it.db`; logs: `journalctl -u gw2it-sync`. The translators of
+/translate, in order, with their keys: `~/gw2it-sync/translators.json` (mode 600), e.g.
+
+```json
+[
+  {"type": "deepl", "key": "...:fx"},
+  {"type": "gemini", "key": "...", "model": "gemini-3.1-flash-lite,gemini-3.6-flash"},
+  {"type": "azure", "key": "...", "region": "italynorth"},
+  {"type": "openai", "name": "Groq", "url": "https://api.groq.com/openai/v1", "key": "...", "model": "openai/gpt-oss-120b"}
+]
+```
 
 ## Cloudflare setup
 
@@ -77,4 +89,6 @@ GW2IT_SYNC_URL=http://localhost:8787 cargo test -p gw2it-addon against_server --
 ```sh
 npx wrangler d1 execute gw2it --remote --command "SELECT author, status, count(*) FROM translations GROUP BY 1, 2"
 npx wrangler d1 execute gw2it --remote --command "UPDATE users SET banned = 1 WHERE name = '...'"
+# a contributor (on ifalna; the spare gets it with the nightly copy)
+ssh ifalna "sqlite3 ~/gw2it-sync/data/gw2it.db \"UPDATE users SET contributor = 1 WHERE token_hash = '<SHA-256 of the token in their config.toml>'\""
 ```

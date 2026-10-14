@@ -1,17 +1,16 @@
-//! POST /translate {texts: [xml...], neighbours} -> {translations: [xml...]}, with a sync token:
-//! DeepL with the server's key, for the players who have none. The addon prepares the texts and
-//! restores the markup (crates/addon/src/markup.rs) as with its own key, then the result reaches
+//! POST /translate {texts: [xml...], neighbours} -> {translations: [xml...], by}, with a sync
+//! token: the server's own translators (gw2it-translate: DeepL, then Gemini while DeepL is out of
+//! quota or does not answer) for the players who have no keys. The addon prepares the texts and
+//! restores the markup (crates/addon/src/markup.rs) as with its own keys, then the result reaches
 //! everyone through /sync like any other translation.
 //!
-//! Each player has a daily budget of characters, so that a single token cannot use up the key.
+//! Each player has a daily budget of characters, so that a single token cannot use up the keys.
 //! Errors keep DeepL's status codes (456 quota, 429, 400), which the addon already handles.
 
-use std::{sync::LazyLock, time::Duration};
-
+use gw2it_translate::Error;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use tiny_http::Request;
-use ureq::Agent;
 
 use crate::{App, HttpError, body, limit, now_ms, user};
 
@@ -23,21 +22,8 @@ const NEIGHBOURS_MAX: usize = 6000;
 /// Requests per minute, per token: a burst of new texts arrives in batches of up to 50.
 const RATE: u32 = 60;
 
-/// The same as the addon's (crates/addon/src/deepl.rs): keep them alike.
-const CONTEXT: &str = "Guild Wars 2, a fantasy MMORPG: in-game texts such as item, skill and \
-    title names, tooltips, achievements, dialogue and user interface labels.";
-
-/// Shorter than the addon's own timeout (15 s), so that it gets our answer.
-static AGENT: LazyLock<Agent> = LazyLock::new(|| {
-    Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(10)))
-        .http_status_as_error(false)
-        .build()
-        .into()
-});
-
 pub const SCHEMA: &str = "
--- Characters translated with the server's DeepL key, per player and day (days since 1970, UTC).
+-- Characters translated with the server's keys, per player and day (days since 1970, UTC).
 CREATE TABLE IF NOT EXISTS usage (
     day   INTEGER NOT NULL,
     user  TEXT    NOT NULL,          -- users.token_hash
@@ -50,10 +36,10 @@ fn today() -> i64 {
 }
 
 pub fn handle(app: &App, request: &mut Request) -> Result<Value, HttpError> {
-    let Some(key) = app.deepl_key.as_deref() else {
+    if app.translators.is_empty() {
         return Err(HttpError(503, "no translations on this server"));
-    };
-    let (token_hash, _) = user(app, request)?;
+    }
+    let token_hash = user(app, request)?.token_hash;
     limit(app, format!("translate:{token_hash}"), RATE)?;
     let input = body(request)?;
 
@@ -73,55 +59,26 @@ pub fn handle(app: &App, request: &mut Request) -> Result<Value, HttpError> {
         return Err(HttpError(456, "daily limit"));
     }
 
-    let translations = deepl(key, &texts, &neighbours)?;
+    let translated = app.translators.translate(&texts, &neighbours).map_err(|e| {
+        eprintln!("translate: {e}");
+        match e {
+            Error::QuotaExceeded => HttpError(456, "quota exceeded"),
+            Error::TooManyRequests => HttpError(429, "too many requests"),
+            Error::BadRequest(_) => HttpError(400, "texts refused"),
+            Error::Forbidden | Error::Other(_) | Error::Paused => HttpError(503, "translators unavailable"),
+        }
+    })?;
+    if translated.by != "deepl" {
+        eprintln!("translate: {} texts by {}", texts.len(), translated.by);
+    }
     app.db.lock().unwrap().execute(
         "INSERT INTO usage (day, user, chars) VALUES (?1, ?2, ?3)
          ON CONFLICT (day, user) DO UPDATE SET chars = chars + excluded.chars",
         params![today(), token_hash, chars],
     )?;
-    Ok(json!({ "translations": translations }))
+    Ok(json!({ "translations": translated.texts, "by": translated.by }))
 }
 
 fn used(db: &Connection, token_hash: &str) -> rusqlite::Result<i64> {
     db.query_row("SELECT coalesce(sum(chars), 0) FROM usage WHERE day = ?1 AND user = ?2", params![today(), token_hash], |r| r.get(0))
-}
-
-fn deepl(key: &str, texts: &[&str], neighbours: &str) -> Result<Vec<String>, HttpError> {
-    let base = if key.ends_with(":fx") { "https://api-free.deepl.com/v2" } else { "https://api.deepl.com/v2" };
-    let body = json!({
-        "text": texts,
-        "source_lang": "EN",
-        "target_lang": "IT",
-        "tag_handling": "xml",
-        "formality": "prefer_less",
-        "context": format!("{CONTEXT}\nTexts shown together on screen:\n{neighbours}"),
-    });
-    let mut response = AGENT
-        .post(format!("{base}/translate"))
-        .header("Authorization", format!("DeepL-Auth-Key {key}"))
-        .send_json(&body)
-        .map_err(|e| {
-            eprintln!("deepl: {e}");
-            HttpError(502, "translator unreachable")
-        })?;
-    let status = response.status().as_u16();
-    if status != 200 {
-        let text = response.body_mut().read_to_string().unwrap_or_default();
-        eprintln!("deepl: HTTP {status} {}", text.chars().take(300).collect::<String>());
-        return Err(match status {
-            456 => HttpError(456, "quota exceeded"),
-            429 => HttpError(429, "too many requests"),
-            400 => HttpError(400, "texts refused"),
-            _ => HttpError(503, "translator unavailable"),
-        });
-    }
-    let reply: Value = response.body_mut().read_json().map_err(|_| HttpError(502, "bad answer from the translator"))?;
-    let translations: Vec<String> = reply["translations"]
-        .as_array()
-        .map(|t| t.iter().filter_map(|t| t["text"].as_str().map(str::to_owned)).collect())
-        .unwrap_or_default();
-    if translations.len() != texts.len() {
-        return Err(HttpError(502, "bad answer from the translator"));
-    }
-    Ok(translations)
 }

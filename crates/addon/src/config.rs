@@ -1,4 +1,5 @@
-//! config.toml in the addon folder. Edited from the in-game window or by hand (read at load).
+//! config.toml in the addon folder. Edited from the addon's options in Nexus or by hand (read at
+//! load).
 
 use std::{
     fs,
@@ -12,7 +13,10 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub struct Config {
     pub deepl: Deepl,
+    pub azure: Azure,
     pub gemini: Gemini,
+    /// Other language models, with OpenAI's API: after Azure, in this order.
+    pub llm: Vec<Llm>,
     pub sync: Sync,
     pub install: Install,
 }
@@ -37,18 +41,42 @@ impl Default for Deepl {
     }
 }
 
-/// LLM that will review the machine translations (not used yet).
+/// Microsoft Azure AI Translator: after Gemini.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Azure {
+    pub api_key: String,
+    /// The resource's region, e.g. westeurope; empty for a global resource.
+    pub region: String,
+}
+
+/// A service with OpenAI's API: Groq, OpenRouter, Mistral, Cerebras...
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Llm {
+    pub name: String,
+    /// API base, e.g. https://api.groq.com/openai/v1.
+    pub url: String,
+    pub api_key: String,
+    pub model: String,
+}
+
+/// Gemini: after DeepL.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Gemini {
     /// Google AI Studio key (https://aistudio.google.com/apikey).
     pub api_key: String,
+    /// Models in order, separated by commas: the next one when one is overloaded.
     pub model: String,
 }
 
+/// Fast ones: a fallback must not keep the game in English for long.
+pub const GEMINI_MODELS: &str = "gemini-3.1-flash-lite,gemini-3.6-flash";
+
 impl Default for Gemini {
     fn default() -> Self {
-        Self { api_key: String::new(), model: "gemini-3.8-flash".into() }
+        Self { api_key: String::new(), model: GEMINI_MODELS.into() }
     }
 }
 

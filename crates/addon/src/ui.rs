@@ -1,4 +1,5 @@
-//! In-game window (ALT+SHIFT+I): status, API keys and, for contributors, the translation editor.
+//! In-game window (ALT+SHIFT+I): status and, for contributors, the translation editor. The keys
+//! are in the addon's options in Nexus (options.rs).
 
 use std::{
     sync::{
@@ -9,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use nexus::imgui::{ChildWindow, Selectable, TreeNodeFlags, Ui, Window};
+use nexus::imgui::{ChildWindow, Selectable, Ui, Window};
 
 use crate::{
     config, markup,
@@ -25,8 +26,6 @@ static STATE: Mutex<Option<State>> = Mutex::new(None);
 const RECENT_REFRESH: Duration = Duration::from_secs(2);
 
 struct State {
-    deepl_key: String,
-    gemini_key: String,
     query: String,
     rows: Vec<Row>,
     pending: Option<Receiver<Vec<Row>>>,
@@ -38,10 +37,7 @@ struct State {
 
 impl State {
     fn new() -> Self {
-        let c = config::get();
         Self {
-            deepl_key: c.deepl.api_key,
-            gemini_key: c.gemini.api_key,
             query: String::new(),
             rows: Vec::new(),
             pending: None,
@@ -77,9 +73,6 @@ pub fn render(ui: &Ui) {
     let state = state.get_or_insert_with(State::new);
     Window::new("Italian Translation").opened(&mut open).size([700.0, 600.0], nexus::imgui::Condition::FirstUseEver).build(ui, || {
         status(ui);
-        if ui.collapsing_header("Chiavi API", TreeNodeFlags::empty()) {
-            keys(ui, state);
-        }
         // The editor only for contributors (contributor.json in the addon folder).
         if let Some(user) = config::contributor() {
             ui.separator();
@@ -126,18 +119,6 @@ fn status(ui: &Ui) {
             sync.sent,
             sync.received,
         ));
-    }
-}
-
-fn keys(ui: &Ui, state: &mut State) {
-    ui.text_wrapped("Facoltative: senza chiave DeepL traduce il server del progetto.");
-    ui.input_text("Chiave DeepL", &mut state.deepl_key).password(true).build();
-    ui.input_text("Chiave Gemini", &mut state.gemini_key).password(true).build();
-    if ui.button("Salva chiavi") {
-        let mut c = config::get();
-        c.deepl.api_key = state.deepl_key.trim().to_owned();
-        c.gemini.api_key = state.gemini_key.trim().to_owned();
-        config::set(c);
     }
 }
 
@@ -205,7 +186,7 @@ fn editor(ui: &Ui, state: &mut State, user: &str) {
         ui.text_disabled("Salva");
     }
     ui.same_line();
-    if ui.button("Ritraduci con DeepL") {
+    if ui.button("Ritraduci") {
         store::forget(row.id, row.hash);
         translate::request(Job { id: row.id, hash: row.hash, en: row.en.clone(), force: true });
         update_row(state, row.id, row.hash, None, None);

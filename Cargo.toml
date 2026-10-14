@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/proto", "crates/shim", "crates/addon", "crates/server"]
+members = ["crates/proto", "crates/translate", "crates/shim", "crates/addon", "crates/server"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Ralkeon"]
 license = "MIT"
@@ -11,6 +11,7 @@ repository = "https://github.com/ralkeon/gw2-italian-translation"
 
 [workspace.dependencies]
 gw2it-proto = { path = "crates/proto" }
+gw2it-translate = { path = "crates/translate" }
 log = "0.4"
 windows-sys = "0.60"
 

@@ -97,12 +97,12 @@ async function user(request, env) {
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
   if (!token) throw new HttpError(401, "missing token");
   await limit(env, "sync:" + token);
-  const row = await env.DB.prepare("SELECT name, banned FROM users WHERE token_hash = ?1")
+  const row = await env.DB.prepare("SELECT name, banned, contributor FROM users WHERE token_hash = ?1")
     .bind(await sha256(token))
     .first();
   if (!row) throw new HttpError(401, "unknown token");
   if (row.banned) throw new HttpError(403, "banned");
-  return row.name;
+  return row;
 }
 
 /** A row sent by the addon: [id, hash, en, it, status]. Null if malformed. */
@@ -122,12 +122,14 @@ function valid(row) {
  *   -> {rows: [[id, hash, en, it, status, author, seq]...], seq, more, next_s, accepted}
  */
 async function sync(request, env) {
-  const name = await user(request, env);
+  const { name, contributor } = await user(request, env);
   const input = await body(request);
   const since = Number.isSafeInteger(input.since) && input.since > 0 ? input.since : 0;
   const sent = Array.isArray(input.rows) ? input.rows : [];
   if (sent.length > PUSH_MAX) throw new HttpError(413, `at most ${PUSH_MAX} rows`);
   const rows = sent.map(valid).filter(Boolean);
+  // Anyone can write contributor.json: only the contributors' hand corrections count as such.
+  if (!contributor) for (const row of rows) row[4] = "auto";
 
   if (rows.length > 0) {
     const json = JSON.stringify(rows);
@@ -161,7 +163,7 @@ const REPLICA_MAX = 300;
  * POST /replica/export {after, since} -> {translations, users, history}
  *   translations written here (seq >= SEQ_FLOOR, after `after`, oldest first, up to REPLICA_MAX):
  *     [id, hash, en, it, status, author, at, seq]
- *   users registered here since `since` (unix ms): [token_hash, name, created, banned]
+ *   users registered here since `since` (unix ms): [token_hash, name, created, banned, contributor]
  *   history (only what was written here: the main server's is not copied): every row.
  */
 async function replicaExport(request, env) {
@@ -172,7 +174,7 @@ async function replicaExport(request, env) {
     env.DB.prepare(
       "SELECT id, hash, en, it, status, author, at, seq FROM translations WHERE seq > ?1 ORDER BY seq LIMIT ?2",
     ).bind(after, REPLICA_MAX),
-    env.DB.prepare("SELECT token_hash, name, created, banned FROM users WHERE created >= ?1").bind(since),
+    env.DB.prepare("SELECT token_hash, name, created, banned, contributor FROM users WHERE created >= ?1").bind(since),
     env.DB.prepare("SELECT id, hash, it, status, author, at, replaced_by, replaced_at FROM history"),
   ]);
   const rows = (r) => r.results.map((o) => Object.values(o));
@@ -181,7 +183,7 @@ async function replicaExport(request, env) {
 
 /**
  * POST /replica/import {clear, translations: [[id, hash, en, it, status, author, at, seq]...],
- *   users: [[token_hash, name, created, banned]...]}
+ *   users: [[token_hash, name, created, banned, contributor]...]}
  *   The main server's rows, as they are there. `clear` (first call of a run): drop what was written
  *   here, the main server has taken it back.
  */
@@ -209,9 +211,9 @@ async function replicaImport(request, env) {
   if (users.length > 0) {
     statements.push(
       env.DB.prepare(
-        `INSERT OR REPLACE INTO users (token_hash, name, created, banned)
+        `INSERT OR REPLACE INTO users (token_hash, name, created, banned, contributor)
          SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'),
-                json_extract(value, '$[3]')
+                json_extract(value, '$[3]'), coalesce(json_extract(value, '$[4]'), 0)
          FROM json_each(?1)`,
       ).bind(JSON.stringify(users)),
     );
