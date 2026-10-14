@@ -14,3 +14,9 @@ database_id = "de1c15b0-05a1-4962-af50-4f3b5fb72aa1"
 name = "LIMITER"
 namespace_id = "1001"
 simple = { limit = 30, period = 60 }
+
+# sql/*.sql imported as strings (shared with crates/server).
+[[rules]]
+type = "Text"
+globs = ["**/*.sql"]
+fallthrough = true

@@ -1,0 +1,2 @@
+# Files that run on the Linux server keep LF line endings in any checkout.
+crates/server/deploy/* text eol=lf

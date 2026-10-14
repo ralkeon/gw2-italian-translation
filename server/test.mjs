@@ -2,7 +2,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
-import { SQL_HISTORY, SQL_UPSERT, SQL_PULL } from "./src/sql.js";
+const sql = (name) => readFileSync(new URL(`./sql/${name}.sql`, import.meta.url), "utf8");
+const [SQL_HISTORY, SQL_UPSERT, SQL_PULL] = ["history", "upsert", "pull"].map(sql);
 
 const db = new DatabaseSync(":memory:");
 db.exec(readFileSync(new URL("./schema.sql", import.meta.url), "utf8"));

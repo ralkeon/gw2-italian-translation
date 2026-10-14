@@ -74,8 +74,9 @@ impl Sync {
     }
 }
 
-/// The project's server (server/ in the repository).
-const SYNC_URL: &str = "https://gw2it-sync.gw2it-sync.workers.dev";
+/// The project's server: crates/server on ifalna (server/README.md: the same API on Cloudflare,
+/// https://gw2it-sync.gw2it-sync.workers.dev, a cold spare).
+const SYNC_URL: &str = "https://ifalna.ralkeon.com/gw2it";
 
 static CONFIG: Mutex<Option<(PathBuf, Config)>> = Mutex::new(None);
 

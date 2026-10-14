@@ -1,0 +1,17 @@
+[Unit]
+Description=Italian Translation global translations database (gw2it-sync)
+After=network.target
+
+[Service]
+User=ralkeon
+WorkingDirectory=/home/ralkeon/gw2it-sync
+ExecStart=/home/ralkeon/gw2it-sync/gw2it-server --db /home/ralkeon/gw2it-sync/data/gw2it.db --listen 127.0.0.1:8790
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/ralkeon/gw2it-sync/data
+
+[Install]
+WantedBy=multi-user.target

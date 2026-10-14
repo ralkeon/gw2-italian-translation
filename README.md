@@ -47,7 +47,8 @@ cargo build --release
 ```
 
 Produce `target/release/italian_translation.dll` e `target/release/gw2it_shim.exe`.
-Il server del database globale è in [`server/`](server/README.md).
+Il server del database globale è in [`crates/server`](crates/server) (in uso, su ifalna) e in
+[`server/`](server/README.md) (Cloudflare, riserva da attivare a mano).
 
 ## Licenza
 

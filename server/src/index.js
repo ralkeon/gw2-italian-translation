@@ -12,7 +12,10 @@
 // Every write is a single statement over a JSON array (json_each): D1 counts statements per
 // request, and a statement is atomic, so `seq` is never handed out twice.
 
-import { SQL_HISTORY, SQL_UPSERT, SQL_PULL } from "./sql.js";
+// The statements are shared with the self-hosted server (crates/server) and test.mjs.
+import SQL_HISTORY from "../sql/history.sql";
+import SQL_UPSERT from "../sql/upsert.sql";
+import SQL_PULL from "../sql/pull.sql";
 
 /** Rows accepted in one /sync: the addon sends at most this many. */
 const PUSH_MAX = 200;
