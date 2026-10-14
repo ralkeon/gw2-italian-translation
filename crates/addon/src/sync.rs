@@ -423,6 +423,18 @@ mod tests {
     }
 
     #[test]
+    fn server_proof_goes_with_the_machine_translation_only() {
+        let con = db();
+        // A proof for the machine translation (1) and a stale one for the hand correction (2).
+        con.execute_batch("INSERT INTO proofs VALUES (1, 1, 'abc123', '<x id=\"0\"/> Spada'), (2, 2, 'def456', 'Scudo');").unwrap();
+        let out = pending(&con, Mark::default()).unwrap();
+        assert_eq!(out.iter().map(|o| o.row.to_string()).collect::<Vec<_>>(), [
+            r#"[1,"0000000000000001","Sword","Spada","auto","abc123","<x id=\"0\"/> Spada"]"#,
+            r#"[2,"0000000000000002","Shield","Scudo","manual"]"#,
+        ]);
+    }
+
+    #[test]
     fn merge() {
         let mut con = db();
         let out = pending(&con, Mark::default()).unwrap();
