@@ -39,6 +39,9 @@ const TEXT_MAX: usize = 4000;
 const BODY_MAX: u64 = 1 << 20;
 /// Requests per minute, per token (and per address for /register).
 const RATE: u32 = 30;
+/// Registrations per address in REGISTER_WINDOW.
+const REGISTER_PER_DAY: u32 = 5;
+const REGISTER_WINDOW: Duration = Duration::from_secs(86_400);
 const THREADS: usize = 4;
 
 struct App {
@@ -193,18 +196,23 @@ pub(crate) fn now_ms() -> i64 {
 }
 
 fn limit(app: &App, key: String, per_minute: u32) -> Result<(), HttpError> {
+    limit_in(app, key, per_minute, Duration::from_secs(60))
+}
+
+/// At most `max` requests per `window` for `key` (counted in memory: a restart resets it).
+fn limit_in(app: &App, key: String, max: u32, window: Duration) -> Result<(), HttpError> {
     let mut rate = app.rate.lock().unwrap();
     let now = Instant::now();
-    // Forget the idle ones now and then.
+    // Forget the expired ones now and then.
     if rate.len() > 10_000 {
-        rate.retain(|_, (start, _)| now.duration_since(*start) < Duration::from_secs(60));
+        rate.retain(|k, (start, _)| now.duration_since(*start) < if k.starts_with("register-day:") { REGISTER_WINDOW } else { Duration::from_secs(60) });
     }
     let (start, count) = rate.entry(key).or_insert((now, 0));
-    if now.duration_since(*start) >= Duration::from_secs(60) {
+    if now.duration_since(*start) >= window {
         (*start, *count) = (now, 0);
     }
     *count += 1;
-    if *count > per_minute { Err(HttpError(429, "too many requests")) } else { Ok(()) }
+    if *count > max { Err(HttpError(429, "too many requests")) } else { Ok(()) }
 }
 
 fn body(request: &mut Request) -> Result<Value, HttpError> {
@@ -225,17 +233,22 @@ fn sha256(text: &str) -> String {
     Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The client's address: the first one in X-Forwarded-For when behind a proxy.
-fn client(request: &Request) -> String {
+/// The client's address: the last one in X-Forwarded-For when behind a proxy. The proxy appends the
+/// address it saw to what the client sent, so only the last value cannot be forged.
+pub(crate) fn client(request: &Request) -> String {
     header(request, "X-Forwarded-For")
-        .and_then(|h| h.split(',').next().map(|a| a.trim().to_owned()))
+        .and_then(|h| h.split(',').next_back().map(|a| a.trim().to_owned()))
+        .filter(|a| !a.is_empty())
         .or_else(|| request.remote_addr().map(|a| a.ip().to_string()))
         .unwrap_or_else(|| "?".into())
 }
 
 /// POST /register {name} -> {token}: one token per installation, kept in its config.toml.
 fn register(app: &App, request: &mut Request) -> Result<Value, HttpError> {
-    limit(app, format!("register:{}", client(request)), RATE)?;
+    let ip = client(request);
+    limit(app, format!("register:{ip}"), RATE)?;
+    // One installation registers once: a few per address and day (a household, a shared network).
+    limit_in(app, format!("register-day:{ip}"), REGISTER_PER_DAY, REGISTER_WINDOW)?;
     let input = body(request)?;
     let name: String = input["name"].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).collect();
     let name: String = name.trim().chars().take(32).collect();
