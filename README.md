@@ -1,14 +1,34 @@
 # Italian Translation
 
 Addon per [Nexus](https://raidcore.gg/Nexus) che traduce in italiano i testi di Guild Wars 2,
-attraverso l'addon [Text Translator](https://github.com/ideka/modulep) di Ideka.
+attraverso l'addon [Text Translator](https://github.com/ideka/text-translator-public) di Ideka.
+
+## Disclaimer
+
+**EN** — Italian Translation is an unofficial, fan-made project. It is not affiliated with or
+endorsed by ArenaNet, NCSoft or Guild Wars 2. Guild Wars 2 and its texts belong to their owners.
+It runs as a Nexus addon on top of Text Translator and does not modify any game file. The
+translations are produced automatically (DeepL, Gemini and other translation services) and may
+contain errors. Use at your own risk.
+
+*To ArenaNet:* if you see anything here that is a problem and should be removed or changed,
+please contact me (an issue on this repository is fine) and I will take care of it.
+
+**IT** — Italian Translation è un progetto amatoriale non ufficiale. Non è affiliato né approvato
+da ArenaNet, NCSoft o Guild Wars 2. Guild Wars 2 e i suoi testi appartengono ai rispettivi
+proprietari. Funziona come addon di Nexus sopra Text Translator e non modifica nessun file del
+gioco. Le traduzioni sono prodotte automaticamente (DeepL, Gemini e altri servizi di traduzione) e
+possono contenere errori. Usalo a tuo rischio.
+
+*Ad ArenaNet:* se vedete qualcosa che non va bene e che deve essere rimosso o modificato,
+contattatemi (basta aprire una issue su questo repository) e me ne occuperò io.
 
 ## Requisiti
 
 - **Guild Wars 2** con la lingua del gioco in **inglese**: i testi vengono tradotti partendo
   dall'inglese.
 - **[Nexus](https://raidcore.gg/Nexus)** di Raidcore, il caricatore di addon.
-- **Text Translator** di Ideka, da installare con un clic dalla libreria degli addon di Nexus.
+- **[Text Translator](https://github.com/ideka/text-translator-public)** di Ideka, da installare con un clic dalla libreria degli addon di Nexus.
 
 Le chiavi API dei traduttori (DeepL, Gemini e gli altri, anche con i piani gratuiti) sono
 facoltative ma **consigliate**: senza, l'addon si appoggia al server del progetto, che ha limiti
