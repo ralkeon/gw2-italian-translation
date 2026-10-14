@@ -3,7 +3,7 @@
 //!
 //! Plain HTTP on a local address: a reverse proxy (Apache, Caddy...) in front gives it HTTPS.
 //!
-//! gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
+//! gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790] [--deepl-key-file <file>]   (see translate.rs)
 //! gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>   (see replicate.rs)
 
 use std::{
@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 mod replicate;
+mod translate;
 
 const SCHEMA: &str = include_str!("../../../server/schema.sql");
 const SQL_HISTORY: &str = include_str!("../../../server/sql/history.sql");
@@ -40,6 +41,8 @@ const THREADS: usize = 4;
 
 struct App {
     db: Mutex<Connection>,
+    /// For /translate: none, no translations.
+    deepl_key: Option<String>,
     /// key -> (start of the current minute, requests in it)
     rate: Mutex<HashMap<String, (Instant, u32)>>,
 }
@@ -53,7 +56,7 @@ impl From<rusqlite::Error> for HttpError {
     }
 }
 
-const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
+const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790] [--deepl-key-file <file>]
        gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>";
 
 fn main() {
@@ -66,7 +69,7 @@ fn main() {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            (name @ ("--db" | "--listen" | "--to" | "--key-file"), Some(v)) => {
+            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--deepl-key-file"), Some(v)) => {
                 options.insert(name.to_owned(), v);
             }
             _ => {
@@ -97,6 +100,13 @@ fn main() {
         return;
     }
     let listen = options.remove("--listen").unwrap_or_else(|| "127.0.0.1:8790".into());
+    let deepl_key = options.remove("--deepl-key-file").map(|file| {
+        let key = std::fs::read_to_string(&file).unwrap_or_else(|e| {
+            eprintln!("cannot read {file}: {e}");
+            std::process::exit(1);
+        });
+        key.trim().to_owned()
+    });
 
     let con = open(&db).unwrap_or_else(|e| {
         eprintln!("cannot open {db}: {e}");
@@ -106,9 +116,9 @@ fn main() {
         eprintln!("cannot listen on {listen}: {e}");
         std::process::exit(1);
     }));
-    eprintln!("gw2it-server: {db} on http://{listen}");
+    eprintln!("gw2it-server: {db} on http://{listen}, translations {}", if deepl_key.is_some() { "on" } else { "off" });
 
-    let app = Arc::new(App { db: Mutex::new(con), rate: Mutex::new(HashMap::new()) });
+    let app = Arc::new(App { db: Mutex::new(con), deepl_key, rate: Mutex::new(HashMap::new()) });
     let workers: Vec<_> = (0..THREADS)
         .map(|_| {
             let (server, app) = (server.clone(), app.clone());
@@ -129,6 +139,7 @@ fn open(path: &str) -> rusqlite::Result<Connection> {
     con.busy_timeout(Duration::from_secs(5))?;
     con.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
     con.execute_batch(SCHEMA)?;
+    con.execute_batch(translate::SCHEMA)?;
     Ok(con)
 }
 
@@ -139,6 +150,7 @@ fn handle(app: &App, mut request: Request) {
     let result = match (&method, path.as_str()) {
         (Method::Post, "/register") => register(app, &mut request),
         (Method::Post, "/sync") => sync(app, &mut request),
+        (Method::Post, "/translate") => translate::handle(app, &mut request),
         (Method::Get, "/") => Ok(json!({ "service": "gw2it-sync" })),
         _ => Err(HttpError(404, "not found")),
     };
@@ -157,7 +169,7 @@ pub(crate) fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
-fn limit(app: &App, key: String) -> Result<(), HttpError> {
+fn limit(app: &App, key: String, per_minute: u32) -> Result<(), HttpError> {
     let mut rate = app.rate.lock().unwrap();
     let now = Instant::now();
     // Forget the idle ones now and then.
@@ -169,7 +181,7 @@ fn limit(app: &App, key: String) -> Result<(), HttpError> {
         (*start, *count) = (now, 0);
     }
     *count += 1;
-    if *count > RATE { Err(HttpError(429, "too many requests")) } else { Ok(()) }
+    if *count > per_minute { Err(HttpError(429, "too many requests")) } else { Ok(()) }
 }
 
 fn body(request: &mut Request) -> Result<Value, HttpError> {
@@ -200,7 +212,7 @@ fn client(request: &Request) -> String {
 
 /// POST /register {name} -> {token}: one token per installation, kept in its config.toml.
 fn register(app: &App, request: &mut Request) -> Result<Value, HttpError> {
-    limit(app, format!("register:{}", client(request)))?;
+    limit(app, format!("register:{}", client(request)), RATE)?;
     let input = body(request)?;
     let name: String = input["name"].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).collect();
     let name: String = name.trim().chars().take(32).collect();
@@ -227,27 +239,35 @@ fn valid(row: &Value) -> Option<Value> {
     Some(json!([id, hash, en, it, status]))
 }
 
-/// POST /sync {since, rows: [[id, hash, en, it, status]...]}
-///   -> {rows: [[id, hash, en, it, status, author, seq]...], seq, more, next_s, accepted}
-fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
+/// The installation behind the request's token: (token hash, name).
+fn user(app: &App, request: &Request) -> Result<(String, String), HttpError> {
     let token = header(request, "Authorization")
         .and_then(|h| h.strip_prefix("Bearer ").map(|t| t.trim().to_owned()))
         .filter(|t| !t.is_empty())
         .ok_or(HttpError(401, "missing token"))?;
-    limit(app, format!("sync:{token}"))?;
-    let input = body(request)?;
-
-    let mut db = app.db.lock().unwrap();
-    let user: Option<(String, bool)> = db
-        .query_row("SELECT name, banned FROM users WHERE token_hash = ?1", [sha256(&token)], |r| {
+    let token_hash = sha256(&token);
+    let user: Option<(String, bool)> = app
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT name, banned FROM users WHERE token_hash = ?1", [&token_hash], |r| {
             Ok((r.get(0)?, r.get(1)?))
         })
         .optional()?;
-    let name = match user {
-        None => return Err(HttpError(401, "unknown token")),
-        Some((_, true)) => return Err(HttpError(403, "banned")),
-        Some((name, false)) => name,
-    };
+    match user {
+        None => Err(HttpError(401, "unknown token")),
+        Some((_, true)) => Err(HttpError(403, "banned")),
+        Some((name, false)) => Ok((token_hash, name)),
+    }
+}
+
+/// POST /sync {since, rows: [[id, hash, en, it, status]...]}
+///   -> {rows: [[id, hash, en, it, status, author, seq]...], seq, more, next_s, accepted}
+fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
+    let (token_hash, name) = user(app, request)?;
+    limit(app, format!("sync:{token_hash}"), RATE)?;
+    let input = body(request)?;
+    let mut db = app.db.lock().unwrap();
 
     let since = input["since"].as_i64().filter(|&s| s > 0).unwrap_or(0);
     let sent = input["rows"].as_array().map(Vec::as_slice).unwrap_or_default();

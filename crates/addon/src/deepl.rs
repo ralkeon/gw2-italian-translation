@@ -78,6 +78,7 @@ pub fn translate(key: &str, texts: &[&str], neighbours: &str) -> Result<Vec<Stri
         "formality": "prefer_less",
         "context": format!("{CONTEXT}\nTexts shown together on screen:\n{neighbours}"),
     });
+    // crates/server/src/translate.rs sends the same request: keep them alike.
     let mut response = AGENT
         .post(format!("{}/translate", base_url(key)))
         .header("Authorization", auth(key))
@@ -89,6 +90,27 @@ pub fn translate(key: &str, texts: &[&str], neighbours: &str) -> Result<Vec<Stri
         return Err(Error::Other(format!("{} translations for {} texts", reply.translations.len(), texts.len())));
     }
     Ok(reply.translations.into_iter().map(|t| t.text).collect())
+}
+
+/// The same, done by the project's server with its own key (POST /translate, crates/server), for
+/// players without one. Its errors have DeepL's status codes; 401/403 is about our sync token.
+pub fn translate_on_server(server: &str, token: &str, texts: &[&str], neighbours: &str) -> Result<Vec<String>, Error> {
+    #[derive(Deserialize)]
+    struct Reply {
+        translations: Vec<String>,
+    }
+
+    let mut response = AGENT
+        .post(format!("{server}/translate"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send_json(json!({ "texts": texts, "neighbours": neighbours }))
+        .map_err(|e| Error::Other(e.to_string()))?;
+    check(&mut response)?;
+    let reply: Reply = response.body_mut().read_json().map_err(|e| Error::Other(e.to_string()))?;
+    if reply.translations.len() != texts.len() {
+        return Err(Error::Other(format!("{} translations for {} texts", reply.translations.len(), texts.len())));
+    }
+    Ok(reply.translations)
 }
 
 pub fn usage(key: &str) -> Result<Usage, Error> {

@@ -5,11 +5,13 @@
 //! logic and the in-game UI live here.
 //!
 //! Every source text is saved in strings.db. A text with a saved translation gets it at once;
-//! the others are translated by DeepL in the background and pushed into the game when ready.
+//! the others are translated by DeepL in the background (with the player's key, or by the
+//! project's server) and pushed into the game when ready.
 //! Translations are shared with the other players through a global database (sync.rs).
 
 mod config;
 mod deepl;
+mod install;
 mod markup;
 mod pipe;
 mod plural;
@@ -34,7 +36,8 @@ nexus::export! {
     load,
     unload,
     flags: AddonFlags::None,
-    provider: UpdateProvider::None,
+    // New versions from the GitHub releases (the repository in Cargo.toml).
+    provider: UpdateProvider::GitHub,
     // ureq/rustls trace every HTTP exchange byte by byte: only their warnings.
     log_filter: "debug,ureq=warn,ureq_proto=warn,rustls=warn",
 }
@@ -54,6 +57,10 @@ fn load() {
 
     config::load(&dir.join("config.toml"));
     config::load_contributor(&dir.join("contributor.json"));
+    match get_addon_dir("text_translator") {
+        Ok(tt_dir) => install::module(&tt_dir),
+        Err(e) => log::error!("no Text Translator folder: {e}"),
+    }
     let db = dir.join("strings.db");
     let backlog = match store::start(&db) {
         Ok(backlog) => backlog,

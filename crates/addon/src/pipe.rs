@@ -31,6 +31,7 @@ use windows_sys::Win32::{
 };
 
 use crate::{
+    install,
     state::SHARED,
     store::{self, Seen},
     translate::{self, Job},
@@ -132,6 +133,7 @@ fn session(req_name: &str, rep_name: &str) -> io::Result<()> {
     *REPLIES.lock().unwrap() = Some(File::from(replies));
     SHARED.shim_connected.store(true, Ordering::Relaxed);
     log::info!("shim connected");
+    install::module_works();
     let repaired = store::take_repaired();
     for (id, hash, it) in &repaired {
         send_text(*id, *hash, it);

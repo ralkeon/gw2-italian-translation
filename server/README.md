@@ -31,6 +31,12 @@ interchangeable versions with the same API, schema (schema.sql) and statements (
   -> `{"rows": [[id, hash, en, it, status, author, seq]...], "seq", "more", "next_s", "accepted"}`.
   Sends up to 200 rows, gets back what changed after `since` (up to 2000; `more` if there is more).
 
+- `POST /translate {"texts": [xml...], "neighbours"}` with the same token -> `{"translations": [xml...]}`
+  (crates/server only, with `--deepl-key-file`): DeepL with the server's key, for players without
+  one. Up to 50 texts; 30,000 characters per player per day (table `usage`); errors keep DeepL's
+  codes (456 quota or daily limit, 429, 400). On the spare it is missing: the addon waits for the
+  main server.
+
 Merge: a `manual` row replaces anything (the old text goes to `history`); an `auto` row is only
 stored for a text that has none. `next_s` is the wait the addon keeps between syncs: raise
 `NEXT_S` in src/index.js if the free plan runs short.
@@ -44,7 +50,8 @@ cp target/release/gw2it-server ~/gw2it-sync/
 sudo sh ~/gw2it-sync/install-root.sh   # crates/server/deploy: systemd service + Apache proxy on /gw2it/
 ```
 
-Data in `~/gw2it-sync/data/gw2it.db`; logs: `journalctl -u gw2it-sync`.
+Data in `~/gw2it-sync/data/gw2it.db`; logs: `journalctl -u gw2it-sync`. The DeepL key for
+/translate: `~/gw2it-sync/deepl.key` (mode 600).
 
 ## Cloudflare setup
 

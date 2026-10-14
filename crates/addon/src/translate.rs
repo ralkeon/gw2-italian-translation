@@ -1,4 +1,5 @@
-//! Translation queue: texts with no saved translation go to DeepL in batches, in the background.
+//! Translation queue: texts with no saved translation go to DeepL in batches, in the background:
+//! with the player's key, or through the project's server (which has its own) when there is none.
 //!
 //! The game never waits: it shows the English until the translation is ready, then it is pushed
 //! into the game and saved, so it is never asked for again.
@@ -29,6 +30,12 @@ pub struct Job {
     pub en: String,
     /// Translate again even if it was tried (and rejected) in this session.
     pub force: bool,
+}
+
+/// Who calls DeepL.
+enum Via {
+    Own(String),
+    Server { url: String, token: String },
 }
 
 struct Queued {
@@ -99,7 +106,10 @@ impl Worker {
             if STOP.load(Ordering::SeqCst) {
                 return;
             }
-            let config = config::get().deepl;
+            let (config, sync) = {
+                let c = config::get();
+                (c.deepl, c.sync)
+            };
             if !self.queue.is_empty() {
                 // Let the rest of the burst arrive: it goes in the same batch, as context.
                 let until = Instant::now() + Duration::from_millis(config.batch_wait_ms);
@@ -113,21 +123,31 @@ impl Worker {
             }
             SHARED.queued.store(self.queue.len() as u64, Ordering::Relaxed);
 
-            if config.api_key.is_empty() {
-                set_status("Manca la chiave API di DeepL");
-                continue;
-            }
-            if self.refused_key.as_deref() == Some(config.api_key.as_str()) {
-                continue;
-            }
-            if self.last_usage.is_none_or(|t| t.elapsed() >= USAGE_EVERY) {
-                self.update_usage(&config.api_key);
-            }
+            let via = if config.api_key.is_empty() {
+                if !sync.enabled {
+                    set_status("Manca la chiave DeepL (e il DB globale è spento)");
+                    continue;
+                }
+                // The token comes with the first sync.
+                if sync.token.is_empty() {
+                    set_status("In attesa del server del progetto");
+                    continue;
+                }
+                Via::Server { url: sync.server().to_owned(), token: sync.token }
+            } else {
+                if self.refused_key.as_deref() == Some(config.api_key.as_str()) {
+                    continue;
+                }
+                if self.last_usage.is_none_or(|t| t.elapsed() >= USAGE_EVERY) {
+                    self.update_usage(&config.api_key);
+                }
+                Via::Own(config.api_key)
+            };
             if self.queue.is_empty() || self.paused_until.is_some_and(|t| Instant::now() < t) {
                 continue;
             }
             self.paused_until = None;
-            self.translate_batch(&config.api_key, config.batch_max.clamp(1, 50));
+            self.translate_batch(&via, config.batch_max.clamp(1, 50));
         }
     }
 
@@ -150,7 +170,7 @@ impl Worker {
         self.queue.push_back(Queued { job, prepared });
     }
 
-    fn translate_batch(&mut self, key: &str, max: usize) {
+    fn translate_batch(&mut self, via: &Via, max: usize) {
         let n = self.queue.len().min(max);
         let batch: Vec<Queued> = self.queue.drain(..n).collect();
         let texts: Vec<&str> = batch.iter().map(|q| q.prepared.xml.as_str()).collect();
@@ -163,8 +183,17 @@ impl Worker {
             neighbours.push('\n');
         }
 
-        set_status(&format!("Traduco {n} testi..."));
-        match deepl::translate(key, &texts, &neighbours) {
+        let (result, who) = match via {
+            Via::Own(key) => {
+                set_status(&format!("Traduco {n} testi..."));
+                (deepl::translate(key, &texts, &neighbours), "DeepL")
+            }
+            Via::Server { url, token } => {
+                set_status(&format!("Traduco {n} testi (server del progetto)..."));
+                (deepl::translate_on_server(url, token, &texts, &neighbours), "Server")
+            }
+        };
+        match result {
             Ok(translations) => {
                 let mut rejected = 0;
                 for (q, xml) in batch.iter().zip(&translations) {
@@ -193,20 +222,27 @@ impl Worker {
                     log::warn!("  {}: {:?}", q.job.id, q.prepared.xml);
                 }
                 SHARED.rejected.fetch_add(n as u64, Ordering::Relaxed);
-                set_status(&format!("DeepL: richiesta rifiutata ({n} testi scartati)"));
+                set_status(&format!("{who}: richiesta rifiutata ({n} testi scartati)"));
             }
             Err(e) => {
-                let pause = match e {
-                    Error::QuotaExceeded => Duration::from_secs(3600),
-                    Error::TooManyRequests => Duration::from_secs(10),
-                    Error::Forbidden => {
-                        self.refused_key = Some(key.to_owned());
+                let pause = match (&e, via) {
+                    (Error::QuotaExceeded, _) => Duration::from_secs(3600),
+                    (Error::TooManyRequests, _) => Duration::from_secs(10),
+                    (Error::Forbidden, Via::Own(key)) => {
+                        self.refused_key = Some(key.clone());
                         Duration::ZERO
                     }
-                    Error::Other(_) | Error::BadRequest(_) => Duration::from_secs(30),
+                    // Our sync token: the sync thread gets a new one.
+                    (Error::Forbidden, Via::Server { .. }) => Duration::from_secs(60),
+                    (Error::Other(_) | Error::BadRequest(_), _) => Duration::from_secs(30),
                 };
-                log::warn!("DeepL: {e}");
-                set_status(&format!("DeepL: {e}"));
+                log::warn!("{who}: {e}");
+                match (&e, via) {
+                    (Error::QuotaExceeded, Via::Server { .. }) => {
+                        set_status("Server: limite di traduzioni raggiunto, riprovo tra un'ora")
+                    }
+                    _ => set_status(&format!("{who}: {e}")),
+                }
                 self.paused_until = Some(Instant::now() + pause);
                 // Back at the front, in the same order.
                 for q in batch.into_iter().rev() {

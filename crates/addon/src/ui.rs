@@ -93,7 +93,10 @@ fn status(ui: &Ui) {
     if SHARED.shim_connected.load(Ordering::Relaxed) {
         ui.text_colored([0.4, 0.9, 0.4, 1.0], "Text Translator collegato");
     } else {
-        ui.text_colored([0.9, 0.6, 0.3, 1.0], "In attesa di Text Translator (modulo Italian Translation avviato?)");
+        ui.text_colored([0.9, 0.6, 0.3, 1.0], "In attesa di Text Translator");
+        ui.text_wrapped(
+            "Serve l'addon Text Translator (libreria di Nexus), con il modulo Italian Translation scelto nelle              sue impostazioni. Se l'hai appena installato, riavvia il gioco.",
+        );
     }
     ui.text(format!(
         "Richieste in questa sessione: {}   Testi in archivio: {}",
@@ -127,6 +130,7 @@ fn status(ui: &Ui) {
 }
 
 fn keys(ui: &Ui, state: &mut State) {
+    ui.text_wrapped("Facoltative: senza chiave DeepL traduce il server del progetto.");
     ui.input_text("Chiave DeepL", &mut state.deepl_key).password(true).build();
     ui.input_text("Chiave Gemini", &mut state.gemini_key).password(true).build();
     if ui.button("Salva chiavi") {

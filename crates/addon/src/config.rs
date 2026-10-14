@@ -14,12 +14,14 @@ pub struct Config {
     pub deepl: Deepl,
     pub gemini: Gemini,
     pub sync: Sync,
+    pub install: Install,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Deepl {
-    /// DeepL API key (https://www.deepl.com/your-account/keys). Empty: no translations.
+    /// DeepL API key (https://www.deepl.com/your-account/keys). Empty: the project's server
+    /// translates, with its own key.
     /// Keys ending in ":fx" are API Free keys and use the api-free endpoint.
     pub api_key: String,
     /// Most texts sent in one request (DeepL accepts up to 50).
@@ -88,6 +90,15 @@ impl Sync {
         let url = if url.is_empty() { SYNC_FALLBACK_URL } else { url };
         (url != "off" && !url.is_empty() && url != self.server()).then_some(url)
     }
+}
+
+/// What the DLL set up by itself (install.rs).
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Install {
+    /// The Text Translator module connected at least once: from then on, which module is active
+    /// is the player's choice.
+    pub module_worked: bool,
 }
 
 /// The project's server: crates/server on ifalna.
