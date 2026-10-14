@@ -4,6 +4,7 @@
 //! Plain HTTP on a local address: a reverse proxy (Apache, Caddy...) in front gives it HTTPS.
 //!
 //! gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
+//! gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>   (see replicate.rs)
 
 use std::{
     collections::HashMap,
@@ -17,6 +18,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tiny_http::{Header, Method, Request, Response, Server};
+
+mod replicate;
 
 const SCHEMA: &str = include_str!("../../../server/schema.sql");
 const SQL_HISTORY: &str = include_str!("../../../server/sql/history.sql");
@@ -50,20 +53,50 @@ impl From<rusqlite::Error> for HttpError {
     }
 }
 
+const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
+       gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>";
+
 fn main() {
-    let mut db = "gw2it.db".to_owned();
-    let mut listen = "127.0.0.1:8790".to_owned();
-    let mut args = std::env::args().skip(1);
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let replicate = args.first().is_some_and(|a| a == "replicate");
+    if replicate {
+        args.remove(0);
+    }
+    let mut options = HashMap::new();
+    let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            ("--db", Some(v)) => db = v,
-            ("--listen", Some(v)) => listen = v,
+            (name @ ("--db" | "--listen" | "--to" | "--key-file"), Some(v)) => {
+                options.insert(name.to_owned(), v);
+            }
             _ => {
-                eprintln!("usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]");
+                eprintln!("{USAGE}");
                 std::process::exit(2);
             }
         }
     }
+    let db = options.remove("--db").unwrap_or_else(|| "gw2it.db".into());
+
+    if replicate {
+        let (Some(to), Some(key_file)) = (options.remove("--to"), options.remove("--key-file")) else {
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        };
+        let key = std::fs::read_to_string(&key_file).unwrap_or_else(|e| {
+            eprintln!("cannot read {key_file}: {e}");
+            std::process::exit(1);
+        });
+        let con = open(&db).unwrap_or_else(|e| {
+            eprintln!("cannot open {db}: {e}");
+            std::process::exit(1);
+        });
+        if let Err(e) = replicate::run(con, to.trim_end_matches('/'), key.trim()) {
+            eprintln!("replicate: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    let listen = options.remove("--listen").unwrap_or_else(|| "127.0.0.1:8790".into());
 
     let con = open(&db).unwrap_or_else(|e| {
         eprintln!("cannot open {db}: {e}");
@@ -120,7 +153,7 @@ fn handle(app: &App, mut request: Request) {
     let _ = request.respond(Response::from_string(body.to_string()).with_status_code(status).with_header(header));
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
@@ -227,7 +260,7 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
         let now = now_ms();
         let tx = db.transaction()?;
         tx.execute(SQL_HISTORY, params![json, name, now])?;
-        tx.execute(SQL_UPSERT, params![json, name, now])?;
+        tx.execute(SQL_UPSERT, params![json, name, now, 0])?;
         tx.commit()?;
     }
 

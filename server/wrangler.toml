@@ -3,6 +3,10 @@ name = "gw2it-sync"
 main = "src/index.js"
 compatibility_date = "2026-06-01"
 
+# The seq handed out here start above the main server's (crates/server on ifalna).
+[vars]
+SEQ_FLOOR = "1000000000000"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "gw2it"

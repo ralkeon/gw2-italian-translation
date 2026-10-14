@@ -9,6 +9,10 @@
 //! Merge rules, the same as on the server: a hand correction replaces anything, a machine
 //! translation only replaces another machine translation. A hand correction made here and not
 //! sent yet is never replaced.
+//!
+//! When the main server does not answer, the same sync goes to its spare (config.rs), which holds
+//! a copy of it as of last night with the same seq; the main server takes back what was written
+//! there (crates/server/src/replicate.rs). Every sync tries the main server first.
 
 use std::{
     path::{Path, PathBuf},
@@ -68,16 +72,42 @@ pub fn stop() {
 #[derive(Debug)]
 enum Error {
     /// The server does not know our token (new server, or it was revoked): get a new one.
-    Unauthorized,
+    /// True for the spare's token.
+    Unauthorized(bool),
+    /// No answer, or the server is down (5xx): worth trying the spare.
+    Unreachable(String),
     Other(String),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unauthorized => f.write_str("chiave non riconosciuta, ne chiedo una nuova"),
-            Self::Other(e) => f.write_str(e),
+            Self::Unauthorized(_) => f.write_str("chiave non riconosciuta, ne chiedo una nuova"),
+            Self::Unreachable(e) | Self::Other(e) => f.write_str(e),
         }
+    }
+}
+
+/// The server a sync goes to.
+#[derive(Clone, Copy)]
+struct Target<'a> {
+    url: &'a str,
+    token: &'a str,
+    spare: bool,
+}
+
+impl<'a> Target<'a> {
+    fn main(sync: &'a config::Sync) -> Self {
+        Self { url: sync.server(), token: &sync.token, spare: false }
+    }
+
+    fn spare(sync: &'a config::Sync) -> Option<Self> {
+        Some(Self { url: sync.fallback()?, token: &sync.fallback_token, spare: true })
+    }
+
+    /// The newest seq received from it.
+    fn seq_key(&self) -> &'static str {
+        if self.spare { "seq_spare" } else { "seq" }
     }
 }
 
@@ -109,15 +139,15 @@ fn run(db: &Path, stop: &Receiver<()>) {
             wait = INTERVAL;
             continue;
         }
-        match cycle(&mut con, &sync, stop) {
-            Ok(next) => {
+        match sync_once(&mut con, &sync, stop) {
+            Ok((next, _)) => {
                 failures = 0;
                 wait = next;
             }
-            Err(Error::Unauthorized) => {
+            Err(Error::Unauthorized(spare)) => {
                 log::warn!("sync: token refused, registering again");
                 let mut c = config::get();
-                c.sync.token.clear();
+                if spare { c.sync.fallback_token.clear() } else { c.sync.token.clear() }
                 config::set(c);
                 failures += 1;
                 wait = FIRST;
@@ -132,6 +162,28 @@ fn run(db: &Path, stop: &Receiver<()>) {
     }
 }
 
+/// One sync with the main server, or with the spare if the main one does not answer. Returns
+/// the wait before the next one and whether it went to the spare.
+fn sync_once(con: &mut Connection, sync: &config::Sync, stop: &Receiver<()>) -> Result<(Duration, bool), Error> {
+    let main = Target::main(sync);
+    match cycle(con, main, stop) {
+        Ok(next) => {
+            // On the main server: a later fallback starts again from its seq.
+            con.execute("DELETE FROM sync_state WHERE k = 'seq_spare'", [])?;
+            Ok((next, false))
+        }
+        Err(Error::Unreachable(e)) => {
+            let stopping = matches!(stop.try_recv(), Err(TryRecvError::Disconnected));
+            let Some(spare) = Target::spare(sync).filter(|_| !stopping) else {
+                return Err(Error::Unreachable(e));
+            };
+            log::warn!("sync: {e}; trying the spare {}", spare.url);
+            cycle(con, spare, stop).map(|next| (next, true))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 fn open(db: &Path) -> rusqlite::Result<Connection> {
     let con = Connection::open(db)?;
     con.busy_timeout(Duration::from_secs(10))?;
@@ -140,7 +192,8 @@ fn open(db: &Path) -> rusqlite::Result<Connection> {
     Ok(con)
 }
 
-/// Where the last sync stopped: newest seq received, and the last row sent, by (at, id, hash).
+/// Where the last sync stopped: newest seq received (from the server in use), and the last row
+/// sent, by (at, id, hash). The rows sent to the spare reach the main server through it.
 #[derive(Clone, Copy, Default)]
 struct Mark {
     seq: i64,
@@ -150,16 +203,19 @@ struct Mark {
 }
 
 impl Mark {
-    fn load(con: &Connection) -> rusqlite::Result<Self> {
+    fn load(con: &Connection, seq_key: &str) -> rusqlite::Result<Self> {
         let get = |k: &str| -> rusqlite::Result<i64> {
             Ok(con.query_row("SELECT v FROM sync_state WHERE k = ?1", [k], |r| r.get(0)).optional()?.unwrap_or(0))
         };
-        Ok(Self { seq: get("seq")?, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")? })
+        // The spare is a copy of the main server with its seq, plus what was written there (seq
+        // from 10^12): what we had from the main server we need not get again.
+        let seq = get(seq_key)?.max(get("seq")?);
+        Ok(Self { seq, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")? })
     }
 
-    fn save(&self, tx: &Transaction) -> rusqlite::Result<()> {
+    fn save(&self, tx: &Transaction, seq_key: &str) -> rusqlite::Result<()> {
         let mut stmt = tx.prepare_cached("INSERT OR REPLACE INTO sync_state (k, v) VALUES (?1, ?2)")?;
-        for (k, v) in [("seq", self.seq), ("sent_at", self.at), ("sent_id", self.id), ("sent_hash", self.hash)] {
+        for (k, v) in [(seq_key, self.seq), ("sent_at", self.at), ("sent_id", self.id), ("sent_hash", self.hash)] {
             stmt.execute(params![k, v])?;
         }
         Ok(())
@@ -188,21 +244,26 @@ struct Reply {
 
 /// One sync: a few requests while there is more to send or to receive. Returns the wait before
 /// the next one.
-fn cycle(con: &mut Connection, sync: &config::Sync, stop: &Receiver<()>) -> Result<Duration, Error> {
-    let server = sync.server();
-    let token = if sync.token.is_empty() { register(server)? } else { sync.token.clone() };
+fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Duration, Error> {
+    let refused = |e| match e {
+        Error::Unauthorized(_) => Error::Unauthorized(target.spare),
+        e => e,
+    };
+    let server = target.url;
+    let token = if target.token.is_empty() { register(target).map_err(refused)? } else { target.token.to_owned() };
     let mut next = INTERVAL;
     let (mut sent, mut received) = (0, 0);
     for _ in 0..ROUNDS_MAX {
-        let mut mark = Mark::load(con)?;
+        let mut mark = Mark::load(con, target.seq_key())?;
         let outgoing = pending(con, mark)?;
         let rows: Vec<&Value> = outgoing.iter().map(|o| &o.row).collect();
-        let reply: Reply = post(&format!("{server}/sync"), Some(&token), &json!({ "since": mark.seq, "rows": rows }))?;
+        let reply: Reply =
+            post(&format!("{server}/sync"), Some(&token), &json!({ "since": mark.seq, "rows": rows })).map_err(refused)?;
         if let Some(last) = outgoing.last() {
             (mark.at, mark.id, mark.hash) = (last.at, last.id, last.hash);
         }
         mark.seq = mark.seq.max(reply.seq);
-        received += apply(con, &reply.rows, mark)?;
+        received += apply(con, &reply.rows, mark, target.seq_key())?;
         sent += outgoing.len();
         next = Duration::from_secs(reply.next_s.clamp(30, 3600));
         let stopping = matches!(stop.try_recv(), Err(TryRecvError::Disconnected));
@@ -217,22 +278,22 @@ fn cycle(con: &mut Connection, sync: &config::Sync, stop: &Receiver<()>) -> Resu
         s.at = Some(Instant::now());
         s.sent += sent as u64;
         s.received += received as u64;
-        s.status = "ok".into();
+        s.status = if target.spare { "ok (server di riserva)".into() } else { "ok".into() };
     }
     Ok(next)
 }
 
-fn register(server: &str) -> Result<String, Error> {
+fn register(target: Target) -> Result<String, Error> {
     #[derive(Deserialize)]
     struct Registered {
         token: String,
     }
     let name = config::contributor().unwrap_or_default();
-    let Registered { token } = post(&format!("{server}/register"), None, &json!({ "name": name }))?;
+    let Registered { token } = post(&format!("{}/register", target.url), None, &json!({ "name": name }))?;
     let mut c = config::get();
-    c.sync.token = token.clone();
+    if target.spare { c.sync.fallback_token = token.clone() } else { c.sync.token = token.clone() }
     config::set(c);
-    log::info!("sync: registered on {server}");
+    log::info!("sync: registered on {}", target.url);
     Ok(token)
 }
 
@@ -241,11 +302,12 @@ fn post<T: DeserializeOwned>(url: &str, token: Option<&str>, body: &Value) -> Re
     if let Some(token) = token {
         request = request.header("Authorization", format!("Bearer {token}"));
     }
-    let mut response = request.send_json(body).map_err(|e| Error::Other(e.to_string()))?;
+    let mut response = request.send_json(body).map_err(|e| Error::Unreachable(e.to_string()))?;
     match response.status().as_u16() {
         200 => response.body_mut().read_json().map_err(|e| Error::Other(e.to_string())),
-        401 => Err(Error::Unauthorized),
+        401 => Err(Error::Unauthorized(false)),
         429 => Err(Error::Other("server occupato".into())),
+        s @ 500.. => Err(Error::Unreachable(format!("HTTP {s}"))),
         s => {
             let text = response.body_mut().read_to_string().unwrap_or_default();
             Err(Error::Other(format!("HTTP {s} {}", text.chars().take(200).collect::<String>())))
@@ -271,7 +333,7 @@ fn pending(con: &Connection, mark: Mark) -> rusqlite::Result<Vec<Outgoing>> {
 }
 
 /// Saves the received rows and the new mark, in one transaction. Returns how many changed here.
-fn apply(con: &mut Connection, rows: &[Remote], mark: Mark) -> Result<usize, Error> {
+fn apply(con: &mut Connection, rows: &[Remote], mark: Mark, seq_key: &str) -> Result<usize, Error> {
     let tx = con.transaction()?;
     let mut changed = 0;
     {
@@ -315,7 +377,7 @@ fn apply(con: &mut Connection, rows: &[Remote], mark: Mark) -> Result<usize, Err
             ])?;
         }
     }
-    mark.save(&tx)?;
+    mark.save(&tx, seq_key)?;
     tx.commit()?;
     Ok(changed)
 }
@@ -373,22 +435,22 @@ mod tests {
             remote(3, "%str1% Bow", "Arco", "auto"),  // markup lost: refused
             remote(4, "Axe", "Ascia", "auto"),        // never seen here: kept for later
         ];
-        assert_eq!(apply(&mut con, &rows, Mark { seq: 9, ..sent }).unwrap(), 2);
+        assert_eq!(apply(&mut con, &rows, Mark { seq: 9, ..sent }, "seq").unwrap(), 2);
         assert_eq!(texts(&con), [
             (1, "Lama".into(), "cloud:Bea".into()),
             (2, "Scudo nuovo".into(), "editor:Ana".into()),
             (4, "Ascia".into(), "cloud:Bea".into()),
         ]);
-        assert_eq!(Mark::load(&con).unwrap().seq, 9);
+        assert_eq!(Mark::load(&con, "seq").unwrap().seq, 9);
         // Received rows never go back; our correction does.
-        let out = pending(&con, Mark::load(&con).unwrap()).unwrap();
+        let out = pending(&con, Mark::load(&con, "seq").unwrap()).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].row[3], "Scudo nuovo");
 
         // Once sent, a newer correction from someone else replaces it; a machine one never does.
         let sent = Mark { seq: 9, at: out[0].at, id: 2, hash: 2 };
-        apply(&mut con, &[remote(2, "Shield", "Egida", "manual"), remote(4, "Axe", "Scure", "manual")], sent).unwrap();
-        apply(&mut con, &[remote(2, "Shield", "Scudetto", "auto")], sent).unwrap();
+        apply(&mut con, &[remote(2, "Shield", "Egida", "manual"), remote(4, "Axe", "Scure", "manual")], sent, "seq").unwrap();
+        apply(&mut con, &[remote(2, "Shield", "Scudetto", "auto")], sent, "seq").unwrap();
         assert_eq!(texts(&con)[1..], [(2, "Egida".into(), "cloud:Bea".into()), (4, "Scure".into(), "cloud:Bea".into())]);
     }
 
@@ -402,12 +464,90 @@ mod tests {
         let (mut a, mut b) = (db(), Connection::open_in_memory().unwrap());
         b.execute_batch(crate::store::SCHEMA).unwrap();
         b.execute_batch("CREATE TABLE sync_state (k TEXT PRIMARY KEY, v INTEGER NOT NULL);").unwrap();
-        let sync = config::Sync { enabled: true, url, token: String::new() };
-        cycle(&mut a, &sync, &stop).unwrap();
-        cycle(&mut b, &sync, &stop).unwrap();
+        let main = Target { url: &url, token: "", spare: false };
+        cycle(&mut a, main, &stop).unwrap();
+        cycle(&mut b, main, &stop).unwrap();
         let got = texts(&b);
         assert!(got.contains(&(1, "Spada".into(), "cloud:anonimo".into())), "{got:?}");
         assert!(got.contains(&(2, "Scudo".into(), "cloud:anonimo".into())), "{got:?}");
-        assert!(pending(&b, Mark::load(&b).unwrap()).unwrap().is_empty());
+        assert!(pending(&b, Mark::load(&b, "seq").unwrap()).unwrap().is_empty());
+    }
+
+    /// Fallback and nightly copy, end to end. The spare: cd server && echo REPLICA_KEY=test > .dev.vars
+    /// && npx wrangler d1 execute gw2it --local --file schema.sql && npx wrangler dev --port 8788.
+    /// Then: cargo build -p gw2it-server && GW2IT_SPARE_URL=http://localhost:8788
+    /// GW2IT_SERVER_BIN=target/debug/gw2it-server cargo test -p gw2it-addon failover -- --ignored
+    #[test]
+    #[ignore]
+    fn failover() {
+        use std::process::{Child, Command};
+        let spare = std::env::var("GW2IT_SPARE_URL").expect("GW2IT_SPARE_URL");
+        let bin = std::env::var("GW2IT_SERVER_BIN").expect("GW2IT_SERVER_BIN");
+        let dir = std::env::temp_dir().join(format!("gw2it-failover-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (main_db, key) = (dir.join("main.db"), dir.join("replica.key"));
+        std::fs::write(&key, "test").unwrap();
+        let start_main = || -> Child {
+            let child = Command::new(&bin).args(["--db", main_db.to_str().unwrap(), "--listen", "127.0.0.1:8795"]).spawn().unwrap();
+            thread::sleep(Duration::from_millis(500));
+            child
+        };
+        let replicate = || {
+            let out = Command::new(&bin)
+                .args(["replicate", "--db", main_db.to_str().unwrap(), "--to", &spare, "--key-file", key.to_str().unwrap()])
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let sync = config::Sync {
+            enabled: true,
+            url: "http://127.0.0.1:8795".into(),
+            token: String::new(),
+            fallback_url: spare.clone(),
+            fallback_token: String::new(),
+        };
+        let (_stop_tx, stop) = mpsc::channel();
+        let mut a = db();
+        let mut b = Connection::open_in_memory().unwrap();
+        b.execute_batch(crate::store::SCHEMA).unwrap();
+        b.execute_batch(
+            "CREATE TABLE sync_state (k TEXT PRIMARY KEY, v INTEGER NOT NULL);
+             INSERT INTO strings VALUES (9, 9, 'Nine', 0, 0, 1);
+             INSERT INTO translations VALUES (9, 9, 'Nove', 'manual', 'editor:Bea', 50);",
+        )
+        .unwrap();
+
+        // Main server up: A sends its texts there; at night the spare gets a copy.
+        let mut main = start_main();
+        assert!(!sync_once(&mut a, &sync, &stop).unwrap().1);
+        println!("{}", replicate());
+
+        // Main server down: B falls back to the spare, gets A's texts from the copy, sends its own;
+        // A falls back too and gets B's.
+        main.kill().unwrap();
+        main.wait().unwrap();
+        assert!(sync_once(&mut b, &sync, &stop).unwrap().1);
+        let got = texts(&b);
+        assert!(got.contains(&(1, "Spada".into(), "cloud:anonimo".into())), "{got:?}");
+        assert!(sync_once(&mut a, &sync, &stop).unwrap().1);
+        assert!(texts(&a).contains(&(9, "Nove".into(), "cloud:anonimo".into())), "{:?}", texts(&a));
+
+        // Main server back: the night copy takes B's text back; everyone is on the main server.
+        let mut main = start_main();
+        let report = replicate();
+        println!("{report}");
+        assert!(report.contains("back 1 translations"), "{report}");
+        assert!(!sync_once(&mut b, &sync, &stop).unwrap().1);
+        let check = Connection::open(&main_db).unwrap();
+        let nine: (String, String) =
+            check.query_row("SELECT it, status FROM translations WHERE id = 9", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(nine, ("Nove".into(), "manual".into()));
+        // The spare no longer holds rows of its own.
+        assert!(replicate().contains("back 0 translations"));
+        main.kill().unwrap();
+        main.wait().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

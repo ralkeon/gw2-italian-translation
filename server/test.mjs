@@ -13,7 +13,7 @@ function push(author, rows) {
   const json = JSON.stringify(rows);
   clock += 1;
   db.prepare(SQL_HISTORY).run(json, author, clock);
-  db.prepare(SQL_UPSERT).run(json, author, clock);
+  db.prepare(SQL_UPSERT).run(json, author, clock, 0);
 }
 // What changed since the last pull, as a client sees it.
 let since = 0;
@@ -54,4 +54,17 @@ assert.deepEqual(pull(), [[3, "Arco corto", "manual", "Bea"]]);
 // A new client gets everything once.
 since = 0;
 assert.equal(pull().length, 3);
+
+// The spare server hands out seq from its floor up.
+const FLOOR = 1e12;
+db.prepare(SQL_UPSERT).run(JSON.stringify([[5, H, "Axe", "Ascia", "auto"]]), "Ana", 2000, FLOOR);
+assert.equal(db.prepare("SELECT seq FROM translations WHERE id = 5").get().seq, FLOOR + 1);
+db.prepare(SQL_UPSERT).run(JSON.stringify([[6, H, "Mace", "Mazza", "auto"]]), "Ana", 2001, FLOOR);
+assert.equal(db.prepare("SELECT seq FROM translations WHERE id = 6").get().seq, FLOOR + 2);
+// A server merging another's rows keeps their authors.
+const merged = JSON.stringify([[5, H, "Axe", "Scure", "manual", "Bea"]]);
+db.prepare(SQL_HISTORY).run(merged, "replica", 3000);
+db.prepare(SQL_UPSERT).run(merged, "replica", 3000, 0);
+assert.deepEqual(Object.values(db.prepare("SELECT it, author FROM translations WHERE id = 5").get()), ["Scure", "Bea"]);
+assert.deepEqual(Object.values(db.prepare("SELECT author, replaced_by FROM history ORDER BY rowid DESC LIMIT 1").get()), ["Ana", "Bea"]);
 console.log("ok");

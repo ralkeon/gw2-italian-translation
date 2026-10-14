@@ -26,7 +26,7 @@ I dati stanno in `Guild Wars 2/addons/italian_translation/`:
 
 | File | Cosa contiene |
 |---|---|
-| `config.toml` | impostazioni, chiavi API e chiave del database globale (`[sync]`, `enabled = false` per spegnerlo) |
+| `config.toml` | impostazioni, chiavi API e chiavi del database globale (`[sync]`, `enabled = false` per spegnerlo) |
 | `strings.db` | testi del gioco e traduzioni |
 | `map_it.db` | gli stessi testi nel formato di Local Translator, da scambiare tra collaboratori |
 | `contributor.json` | solo per i collaboratori: `{"user": "Nome"}` attiva l'editor |
@@ -48,7 +48,8 @@ cargo build --release
 
 Produce `target/release/italian_translation.dll` e `target/release/gw2it_shim.exe`.
 Il server del database globale è in [`crates/server`](crates/server) (in uso, su ifalna) e in
-[`server/`](server/README.md) (Cloudflare, riserva da attivare a mano).
+[`server/`](server/README.md) (Cloudflare: riserva automatica,
+aggiornata ogni notte).
 
 ## Licenza
 

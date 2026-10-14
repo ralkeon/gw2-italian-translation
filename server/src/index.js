@@ -11,6 +11,11 @@
 //
 // Every write is a single statement over a JSON array (json_each): D1 counts statements per
 // request, and a statement is atomic, so `seq` is never handed out twice.
+//
+// This Worker is the spare of the main server (crates/server on ifalna): the addon comes here only
+// when the main server does not answer. Once a day the main server takes back what was written
+// here (POST /replica/export) and sends its own changes (POST /replica/import). The seq handed
+// out here start at SEQ_FLOOR, so they never mix with the main server's.
 
 // The statements are shared with the self-hosted server (crates/server) and test.mjs.
 import SQL_HISTORY from "../sql/history.sql";
@@ -31,6 +36,8 @@ export default {
     try {
       if (request.method === "POST" && url.pathname === "/register") return await register(request, env);
       if (request.method === "POST" && url.pathname === "/sync") return await sync(request, env);
+      if (request.method === "POST" && url.pathname === "/replica/export") return await replicaExport(request, env);
+      if (request.method === "POST" && url.pathname === "/replica/import") return await replicaImport(request, env);
       if (request.method === "GET" && url.pathname === "/") return reply({ service: "gw2it-sync" });
       return reply({ error: "not found" }, 404);
     } catch (e) {
@@ -127,11 +134,88 @@ async function sync(request, env) {
     const now = Date.now();
     await env.DB.batch([
       env.DB.prepare(SQL_HISTORY).bind(json, name, now),
-      env.DB.prepare(SQL_UPSERT).bind(json, name, now),
+      env.DB.prepare(SQL_UPSERT).bind(json, name, now, floor(env)),
     ]);
   }
 
   const results = await env.DB.prepare(SQL_PULL).bind(since, PULL_MAX).raw();
   const seq = results.length > 0 ? results[results.length - 1][6] : since;
   return reply({ rows: results, seq, more: results.length === PULL_MAX, next_s: NEXT_S, accepted: rows.length });
+}
+
+function floor(env) {
+  return Number(env.SEQ_FLOOR ?? 0);
+}
+
+/** The main server's calls: with the key set by `wrangler secret put REPLICA_KEY`. */
+async function replica(request, env) {
+  const key = request.headers.get("x-replica-key") ?? "";
+  if (!env.REPLICA_KEY || key !== env.REPLICA_KEY) throw new HttpError(404, "not found");
+  return await body(request);
+}
+
+/** Rows of one replica call: enough for a day of fallback, small enough for one D1 statement. */
+const REPLICA_MAX = 300;
+
+/**
+ * POST /replica/export {after, since} -> {translations, users, history}
+ *   translations written here (seq >= SEQ_FLOOR, after `after`, oldest first, up to REPLICA_MAX):
+ *     [id, hash, en, it, status, author, at, seq]
+ *   users registered here since `since` (unix ms): [token_hash, name, created, banned]
+ *   history (only what was written here: the main server's is not copied): every row.
+ */
+async function replicaExport(request, env) {
+  const input = await replica(request, env);
+  const after = Math.max(Number.isSafeInteger(input.after) ? input.after : 0, floor(env) - 1);
+  const since = Number.isSafeInteger(input.since) ? input.since : 0;
+  const [translations, users, history] = await env.DB.batch([
+    env.DB.prepare(
+      "SELECT id, hash, en, it, status, author, at, seq FROM translations WHERE seq > ?1 ORDER BY seq LIMIT ?2",
+    ).bind(after, REPLICA_MAX),
+    env.DB.prepare("SELECT token_hash, name, created, banned FROM users WHERE created >= ?1").bind(since),
+    env.DB.prepare("SELECT id, hash, it, status, author, at, replaced_by, replaced_at FROM history"),
+  ]);
+  const rows = (r) => r.results.map((o) => Object.values(o));
+  return reply({ translations: rows(translations), users: rows(users), history: rows(history) });
+}
+
+/**
+ * POST /replica/import {clear, translations: [[id, hash, en, it, status, author, at, seq]...],
+ *   users: [[token_hash, name, created, banned]...]}
+ *   The main server's rows, as they are there. `clear` (first call of a run): drop what was written
+ *   here, the main server has taken it back.
+ */
+async function replicaImport(request, env) {
+  const input = await replica(request, env);
+  const translations = Array.isArray(input.translations) ? input.translations : [];
+  const users = Array.isArray(input.users) ? input.users : [];
+  if (translations.length > REPLICA_MAX || users.length > 5000) throw new HttpError(413, "too many rows");
+  const statements = [];
+  if (input.clear === true) {
+    statements.push(env.DB.prepare("DELETE FROM translations WHERE seq >= ?1").bind(floor(env)));
+    statements.push(env.DB.prepare("DELETE FROM history"));
+  }
+  if (translations.length > 0) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT OR REPLACE INTO translations (id, hash, en, it, status, author, at, seq)
+         SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'),
+                json_extract(value, '$[3]'), json_extract(value, '$[4]'), json_extract(value, '$[5]'),
+                json_extract(value, '$[6]'), json_extract(value, '$[7]')
+         FROM json_each(?1)`,
+      ).bind(JSON.stringify(translations)),
+    );
+  }
+  if (users.length > 0) {
+    statements.push(
+      env.DB.prepare(
+        `INSERT OR REPLACE INTO users (token_hash, name, created, banned)
+         SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'),
+                json_extract(value, '$[3]')
+         FROM json_each(?1)`,
+      ).bind(JSON.stringify(users)),
+    );
+  }
+  if (statements.length > 0) await env.DB.batch(statements);
+  return reply({ translations: translations.length, users: users.length });
 }

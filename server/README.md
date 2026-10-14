@@ -5,12 +5,23 @@ interchangeable versions with the same API, schema (schema.sql) and statements (
 
 - **crates/server** (in use): a Rust server on a SQLite file, behind Apache on ifalna:
   https://ifalna.ralkeon.com/gw2it (the addon's default, SYNC_URL in crates/addon/src/config.rs).
-- **this folder**: a Cloudflare Worker + D1, https://gw2it-sync.gw2it-sync.workers.dev: a cold
-  spare, not kept in sync and not used by the addon unless `[sync] url` points to it (free plan:
-  100k requests/day, 100k rows written/day, 5M rows read/day).
+- **this folder**: a Cloudflare Worker + D1, https://gw2it-sync.gw2it-sync.workers.dev, the
+  spare (free plan: 100k requests/day, 100k rows written/day, 5M rows read/day).
 
-A database moves from one to the other with its users and seq, so the addons carry on where they
-were (no new token, no new download): `wrangler d1 export` → `sqlite3 gw2it.db < dump.sql`.
+## Spare and fallback
+
+- The addon tries the main server first at every sync; when it gets no answer (or a 5xx) it syncs
+  with the spare instead, with its own token there (`[sync] fallback_token`).
+- Every night at 04:17 cron on ifalna runs `gw2it-server replicate`
+  (crates/server/src/replicate.rs): it takes back what was written on the spare (rows with
+  seq >= `SEQ_FLOOR` = 10^12, new users, history) and merges it with the usual rules, then sends
+  the spare what changed on the main server. The spare then holds the main server's rows with its
+  seq, so an addon that falls back carries on from the seq it had.
+- `POST /replica/export` and `POST /replica/import` need `X-Replica-Key`: the Worker secret
+  `REPLICA_KEY` (`wrangler secret put REPLICA_KEY`), the same as ifalna's
+  `~/gw2it-sync/replica.key`. Log: `~/gw2it-sync/replicate.log`.
+- A whole database still moves from one to the other with its users and seq:
+  `wrangler d1 export` → `sqlite3 gw2it.db < dump.sql`.
 
 ## API
 
@@ -50,7 +61,8 @@ npx wrangler deploy                     # prints the URL
 ```sh
 npm test                                # the SQL of /sync on a local SQLite
 npx wrangler d1 execute gw2it --local --file schema.sql && npx wrangler dev
-GW2IT_SYNC_URL=http://localhost:8787 cargo test -p gw2it-addon -- --ignored   # the addon against it
+GW2IT_SYNC_URL=http://localhost:8787 cargo test -p gw2it-addon against_server -- --ignored   # the addon against it
+# fallback and nightly copy end to end: see the comment of sync::tests::failover
 ```
 
 ## Maintenance
