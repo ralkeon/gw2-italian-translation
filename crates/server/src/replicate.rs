@@ -71,8 +71,9 @@ pub fn run(mut con: Connection, to: &str, key: &str) -> Result<(), String> {
             }
         }
         if !rows.is_empty() {
-            // [id, hash, en, it, status, author]: the statements of /sync, with each row's author.
-            let merged = Value::Array(rows.iter().map(|r| json!([r[0], r[1], r[2], r[3], r[4], r[5]])).collect()).to_string();
+            // [id, hash, en, it, status, author, trust]: the statements of /sync, with each row's
+            // author and trust (a spare from before trust sends none: the statements infer it).
+            let merged = Value::Array(rows.iter().map(|r| json!([r[0], r[1], r[2], r[3], r[4], r[5], r[8]])).collect()).to_string();
             let now = now_ms();
             tx.execute(SQL_HISTORY, params![merged, "replica", now]).map_err(db)?;
             tx.execute(SQL_UPSERT, params![merged, "replica", now, 0]).map_err(db)?;
@@ -108,7 +109,7 @@ pub fn run(mut con: Connection, to: &str, key: &str) -> Result<(), String> {
         let rows: Vec<Value> = {
             let mut stmt = con
                 .prepare_cached(
-                    "SELECT id, hash, en, it, status, author, at, seq FROM translations
+                    "SELECT id, hash, en, it, status, author, at, seq, trust FROM translations
                      WHERE seq > ?1 ORDER BY seq LIMIT ?2",
                 )
                 .map_err(db)?;
@@ -121,7 +122,8 @@ pub fn run(mut con: Connection, to: &str, key: &str) -> Result<(), String> {
                     r.get::<_, String>(4)?,
                     r.get::<_, String>(5)?,
                     r.get::<_, i64>(6)?,
-                    r.get::<_, i64>(7)?
+                    r.get::<_, i64>(7)?,
+                    r.get::<_, i64>(8)?
                 ]))
             })
             .map_err(db)?

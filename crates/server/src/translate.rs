@@ -12,7 +12,7 @@ use rusqlite::params;
 use serde_json::{Value, json};
 use tiny_http::Request;
 
-use crate::{App, HttpError, body, client, limit, now_ms, user};
+use crate::{App, HttpError, body, client, limit, now_ms, sign::sign, user};
 
 /// Characters a player can have translated per day (UTC).
 const DAILY_CHARS: i64 = 30_000;
@@ -109,5 +109,7 @@ pub fn handle(app: &App, request: &mut Request) -> Result<Value, HttpError> {
          ON CONFLICT (day, ip) DO UPDATE SET chars = chars + excluded.chars",
         params![today(), ip, chars],
     )?;
-    Ok(json!({ "translations": translated.texts, "by": translated.by }))
+    // The proof of each text, for /sync (sign.rs).
+    let signatures: Vec<String> = texts.iter().zip(&translated.texts).map(|(sent, answered)| sign(&app.secret, sent, answered)).collect();
+    Ok(json!({ "translations": translated.texts, "by": translated.by, "signatures": signatures }))
 }

@@ -9,12 +9,11 @@
 //! project's server for players without keys: translate.rs) and pushed into the game when ready.
 //! Translations are shared with the other players through a global database (sync.rs).
 
+pub(crate) use gw2it_text::{markup, plural};
 mod config;
 mod install;
-mod markup;
 mod options;
 mod pipe;
-mod plural;
 mod state;
 mod store;
 mod sync;

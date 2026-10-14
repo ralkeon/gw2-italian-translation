@@ -105,9 +105,11 @@ async function user(request, env) {
   return row;
 }
 
-/** A row sent by the addon: [id, hash, en, it, status]. Null if malformed. */
+/** A row sent by the addon: [id, hash, en, it, status] (+ proof). The first five, null if malformed. */
 function valid(row) {
-  if (!Array.isArray(row) || row.length !== 5) return null;
+  // 7 elements: the addon's proof that the server made the translation, which only the main server
+  // checks (crates/server).
+  if (!Array.isArray(row) || (row.length !== 5 && row.length !== 7)) return null;
   const [id, hash, en, it, status] = row;
   if (!Number.isInteger(id) || id < 0 || id > 0xffffffff) return null;
   if (typeof hash !== "string" || !/^[0-9a-f]{16}$/.test(hash)) return null;
@@ -122,14 +124,20 @@ function valid(row) {
  *   -> {rows: [[id, hash, en, it, status, author, seq]...], seq, more, next_s, accepted}
  */
 async function sync(request, env) {
-  const { name, contributor } = await user(request, env);
+  const { name, contributor: level } = await user(request, env);
   const input = await body(request);
   const since = Number.isSafeInteger(input.since) && input.since > 0 ? input.since : 0;
   const sent = Array.isArray(input.rows) ? input.rows : [];
   if (sent.length > PUSH_MAX) throw new HttpError(413, `at most ${PUSH_MAX} rows`);
   const rows = sent.map(valid).filter(Boolean);
   // Anyone can write contributor.json: only the contributors' hand corrections count as such.
-  if (!contributor) for (const row of rows) row[4] = "auto";
+  // The sixth element is the author (the sender), the seventh the trust: see schema.sql.
+  for (const row of rows) {
+    let trust = 0;
+    if (row[4] === "manual" && level >= 1) trust = level >= 2 ? 3 : 2;
+    else row[4] = "auto";
+    row.push(null, trust);
+  }
 
   if (rows.length > 0) {
     const json = JSON.stringify(rows);
@@ -162,7 +170,7 @@ const REPLICA_MAX = 300;
 /**
  * POST /replica/export {after, since} -> {translations, users, history}
  *   translations written here (seq >= SEQ_FLOOR, after `after`, oldest first, up to REPLICA_MAX):
- *     [id, hash, en, it, status, author, at, seq]
+ *     [id, hash, en, it, status, author, at, seq, trust]
  *   users registered here since `since` (unix ms): [token_hash, name, created, banned, contributor]
  *   history (only what was written here: the main server's is not copied): every row.
  */
@@ -172,7 +180,7 @@ async function replicaExport(request, env) {
   const since = Number.isSafeInteger(input.since) ? input.since : 0;
   const [translations, users, history] = await env.DB.batch([
     env.DB.prepare(
-      "SELECT id, hash, en, it, status, author, at, seq FROM translations WHERE seq > ?1 ORDER BY seq LIMIT ?2",
+      "SELECT id, hash, en, it, status, author, at, seq, trust FROM translations WHERE seq > ?1 ORDER BY seq LIMIT ?2",
     ).bind(after, REPLICA_MAX),
     env.DB.prepare("SELECT token_hash, name, created, banned, contributor FROM users WHERE created >= ?1").bind(since),
     env.DB.prepare("SELECT id, hash, it, status, author, at, replaced_by, replaced_at FROM history"),
@@ -182,7 +190,7 @@ async function replicaExport(request, env) {
 }
 
 /**
- * POST /replica/import {clear, translations: [[id, hash, en, it, status, author, at, seq]...],
+ * POST /replica/import {clear, translations: [[id, hash, en, it, status, author, at, seq, trust]...],
  *   users: [[token_hash, name, created, banned, contributor]...]}
  *   The main server's rows, as they are there. `clear` (first call of a run): drop what was written
  *   here, the main server has taken it back.
@@ -200,10 +208,10 @@ async function replicaImport(request, env) {
   if (translations.length > 0) {
     statements.push(
       env.DB.prepare(
-        `INSERT OR REPLACE INTO translations (id, hash, en, it, status, author, at, seq)
+        `INSERT OR REPLACE INTO translations (id, hash, en, it, status, author, at, seq, trust)
          SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'),
                 json_extract(value, '$[3]'), json_extract(value, '$[4]'), json_extract(value, '$[5]'),
-                json_extract(value, '$[6]'), json_extract(value, '$[7]')
+                json_extract(value, '$[6]'), json_extract(value, '$[7]'), coalesce(json_extract(value, '$[8]'), 0)
          FROM json_each(?1)`,
       ).bind(JSON.stringify(translations)),
     );

@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS translations (
     author TEXT    NOT NULL,          -- who sent it
     at     INTEGER NOT NULL,          -- unix ms, when the server received it
     seq    INTEGER NOT NULL,
+    -- Whose word it is, from the least to the most reliable (sql/upsert.sql): 0 machine translation
+    -- sent by an addon, 1 machine translation made by the server itself, 2 hand correction of a
+    -- contributor, 3 of the owner. A row only replaces a lower one; two hand corrections: the last.
+    trust  INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (id, hash)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS translations_seq ON translations (seq);
@@ -34,7 +38,8 @@ CREATE TABLE IF NOT EXISTS users (
     name       TEXT    NOT NULL,
     created    INTEGER NOT NULL,
     banned     INTEGER NOT NULL DEFAULT 0,
-    -- May send hand corrections: the others' 'manual' rows are taken as 'auto'. Set by hand
-    -- (server/README.md). Older databases: ALTER TABLE users ADD COLUMN contributor ...
+    -- 0 nobody special, 1 may send hand corrections (the others' 'manual' rows are taken as 'auto'),
+    -- 2 the owner: the owner's hand corrections beat the contributors'. Set by hand (server/README.md).
+    -- Older databases: ALTER TABLE users ADD COLUMN contributor ...
     contributor INTEGER NOT NULL DEFAULT 0
 );

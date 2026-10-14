@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 mod replicate;
+mod sign;
 mod translate;
 
 const SCHEMA: &str = include_str!("../../../server/schema.sql");
@@ -48,6 +49,8 @@ struct App {
     db: Mutex<Connection>,
     /// For /translate, in order of preference: none, no translations.
     translators: gw2it_translate::Chain,
+    /// Signs the translations /translate makes (sign.rs).
+    secret: Vec<u8>,
     /// key -> (start of the current minute, requests in it)
     rate: Mutex<HashMap<String, (Instant, u32)>>,
 }
@@ -122,7 +125,11 @@ fn main() {
     }));
     eprintln!("gw2it-server: {db} on http://{listen}, translators: {}", if names.is_empty() { "none".into() } else { names.join(", ") });
 
-    let app = Arc::new(App { db: Mutex::new(con), translators, rate: Mutex::new(HashMap::new()) });
+    let secret = sign::secret(&con).unwrap_or_else(|e| {
+        eprintln!("cannot read the signing secret: {e}");
+        std::process::exit(1);
+    });
+    let app = Arc::new(App { db: Mutex::new(con), translators, secret, rate: Mutex::new(HashMap::new()) });
     let workers: Vec<_> = (0..THREADS)
         .map(|_| {
             let (server, app) = (server.clone(), app.clone());
@@ -164,6 +171,15 @@ fn open(path: &str) -> rusqlite::Result<Connection> {
         con.query_row("SELECT count(*) FROM pragma_table_info('users') WHERE name = 'contributor'", [], |r| r.get(0))?;
     if !has_contributor {
         con.execute_batch("ALTER TABLE users ADD COLUMN contributor INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    // Databases from before translations.trust: the hand corrections were all alike.
+    let has_trust: bool =
+        con.query_row("SELECT count(*) FROM pragma_table_info('translations') WHERE name = 'trust'", [], |r| r.get(0))?;
+    if !has_trust {
+        con.execute_batch(
+            "ALTER TABLE translations ADD COLUMN trust INTEGER NOT NULL DEFAULT 0;
+             UPDATE translations SET trust = 2 WHERE status = 'manual';",
+        )?;
     }
     con.execute_batch(translate::SCHEMA)?;
     Ok(con)
@@ -262,25 +278,32 @@ fn register(app: &App, request: &mut Request) -> Result<Value, HttpError> {
     Ok(json!({ "token": token }))
 }
 
-/// A row sent by the addon: [id, hash, en, it, status]. None if malformed.
-fn valid(row: &Value) -> Option<Value> {
-    let [id, hash, en, it, status] = row.as_array()?.as_slice() else {
-        return None;
+/// A row sent by the addon: [id, hash, en, it, status], and for a text made by this server's
+/// /translate [.., signature, the XML it answered] (sign.rs). None if malformed. Its proof is not
+/// checked here.
+fn valid(row: &Value) -> Option<(Value, Option<(String, String)>)> {
+    let (id, hash, en, it, status, proof) = match row.as_array()?.as_slice() {
+        [id, hash, en, it, status] => (id, hash, en, it, status, None),
+        [id, hash, en, it, status, signature, answered] => {
+            let proof = (signature.as_str()?.to_owned(), answered.as_str().filter(|a| a.chars().count() <= TEXT_MAX)?.to_owned());
+            (id, hash, en, it, status, Some(proof))
+        }
+        _ => return None,
     };
     let id = id.as_u64().filter(|&id| id <= u32::MAX as u64)?;
     let hash = hash.as_str().filter(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))?;
     let en = en.as_str().filter(|en| en.chars().count() <= TEXT_MAX)?;
     let it = it.as_str().filter(|it| !it.trim().is_empty() && it.chars().count() <= TEXT_MAX)?;
     let status = status.as_str().filter(|s| *s == "auto" || *s == "manual")?;
-    Some(json!([id, hash, en, it, status]))
+    Some((json!([id, hash, en, it, status]), proof))
 }
 
 /// The installation behind the request's token.
 struct User {
     token_hash: String,
     name: String,
-    /// May send hand corrections.
-    contributor: bool,
+    /// 0 nobody special, 1 may send hand corrections, 2 the owner (users.contributor).
+    level: i64,
 }
 
 fn user(app: &App, request: &Request) -> Result<User, HttpError> {
@@ -289,7 +312,7 @@ fn user(app: &App, request: &Request) -> Result<User, HttpError> {
         .filter(|t| !t.is_empty())
         .ok_or(HttpError(401, "missing token"))?;
     let token_hash = sha256(&token);
-    let user: Option<(String, bool, bool)> = app
+    let user: Option<(String, bool, i64)> = app
         .db
         .lock()
         .unwrap()
@@ -300,14 +323,14 @@ fn user(app: &App, request: &Request) -> Result<User, HttpError> {
     match user {
         None => Err(HttpError(401, "unknown token")),
         Some((_, true, _)) => Err(HttpError(403, "banned")),
-        Some((name, false, contributor)) => Ok(User { token_hash, name, contributor }),
+        Some((name, false, level)) => Ok(User { token_hash, name, level }),
     }
 }
 
 /// POST /sync {since, rows: [[id, hash, en, it, status]...]}
 ///   -> {rows: [[id, hash, en, it, status, author, seq]...], seq, more, next_s, accepted}
 fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
-    let User { token_hash, name, contributor } = user(app, request)?;
+    let User { token_hash, name, level } = user(app, request)?;
     limit(app, format!("sync:{token_hash}"), RATE)?;
     let input = body(request)?;
     let mut db = app.db.lock().unwrap();
@@ -317,12 +340,25 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
     if sent.len() > PUSH_MAX {
         return Err(HttpError(413, "too many rows"));
     }
-    let mut rows: Vec<Value> = sent.iter().filter_map(valid).collect();
-    if !contributor {
+    let mut rows: Vec<Value> = Vec::new();
+    for (mut row, proof) in sent.iter().filter_map(valid) {
         // Anyone can write contributor.json: only the contributors' hand corrections count as such.
-        for row in &mut rows {
-            row[4] = "auto".into();
-        }
+        // The sixth element is the author (the sender), the seventh the trust: see schema.sql.
+        let trust = match (row[4] == "manual", level) {
+            (true, 2..) => 3,
+            (true, 1) => 2,
+            _ => {
+                row[4] = "auto".into();
+                // A machine translation this server made, with its proof: it beats the ones
+                // the addons make themselves.
+                let server_made = proof.is_some_and(|(signature, answered)| {
+                    sign::verify(&app.secret, row[2].as_str().unwrap_or(""), row[3].as_str().unwrap_or(""), &signature, &answered)
+                });
+                i64::from(server_made)
+            }
+        };
+        row.as_array_mut().unwrap().extend([Value::Null, trust.into()]);
+        rows.push(row);
     }
     if !rows.is_empty() {
         let json = Value::Array(rows.clone()).to_string();

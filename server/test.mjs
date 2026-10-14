@@ -67,4 +67,26 @@ db.prepare(SQL_HISTORY).run(merged, "replica", 3000);
 db.prepare(SQL_UPSERT).run(merged, "replica", 3000, 0);
 assert.deepEqual(Object.values(db.prepare("SELECT it, author FROM translations WHERE id = 5").get()), ["Scure", "Bea"]);
 assert.deepEqual(Object.values(db.prepare("SELECT author, replaced_by FROM history ORDER BY rowid DESC LIMIT 1").get()), ["Ana", "Bea"]);
+// Trust: a machine translation made by the server (1) replaces one sent by an addon (0), not the
+// other way round, and not another of its own; the owner's hand correction (3) beats a
+// contributor's (2) whatever the order, and a contributor's never replaces the owner's.
+// Row: [id, hash, en, it, status, author, trust].
+const text = (id) => db.prepare("SELECT it, status, trust FROM translations WHERE id = ?").get(id);
+push("Ana", [[10, H, "Door", "Porta zero", "auto", null, 0]]);
+push("Bea", [[10, H, "Door", "Porta server", "auto", null, 1]]);
+assert.deepEqual(Object.values(text(10)), ["Porta server", "auto", 1]);
+push("Ana", [[10, H, "Door", "Porta altra", "auto", null, 0], [10, H, "Door", "Porta altra", "auto", null, 1]]);
+assert.deepEqual(Object.values(text(10)), ["Porta server", "auto", 1]);
+push("Bea", [[10, H, "Door", "Porta mano", "manual", null, 2]]);
+push("Ana", [[10, H, "Door", "Porta mia", "manual", null, 3]]);
+push("Bea", [[10, H, "Door", "Porta di Bea", "manual", null, 2]]);
+assert.deepEqual(Object.values(text(10)), ["Porta mia", "manual", 3]);
+push("Ana", [[10, H, "Door", "Porta mia 2", "manual", null, 3]]);
+assert.deepEqual(Object.values(text(10)), ["Porta mia 2", "manual", 3]);
+push("Bea", [[10, H, "Door", "Porta server 2", "auto", null, 1]]);
+assert.deepEqual(Object.values(text(10)), ["Porta mia 2", "manual", 3]);
+assert.deepEqual(
+  db.prepare("SELECT it, replaced_by FROM history WHERE id = 10 ORDER BY rowid").all().map(Object.values),
+  [["Porta zero", "Bea"], ["Porta server", "Bea"], ["Porta mano", "Ana"], ["Porta mia", "Ana"]],
+);
 console.log("ok");

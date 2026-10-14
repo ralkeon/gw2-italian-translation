@@ -30,6 +30,8 @@ interchangeable versions with the same API, schema (schema.sql) and statements (
 - `POST /sync {"since", "rows": [[id, hash, en, it, status]...]}` with `Authorization: Bearer <token>`
   -> `{"rows": [[id, hash, en, it, status, author, seq]...], "seq", "more", "next_s", "accepted"}`.
   Sends up to 200 rows, gets back what changed after `since` (up to 2000; `more` if there is more).
+  A row for a text that /translate made may carry two more elements, [.., signature, answered XML]:
+  the proof that the server made it (see Trust).
 
 - `POST /translate {"texts": [xml...], "neighbours"}` with the same token -> `{"translations": [xml...]}`
   (crates/server only, with `--translators translators.json`): the server's translators, for players
@@ -37,11 +39,27 @@ interchangeable versions with the same API, schema (schema.sql) and statements (
   codes (456 quota or daily limit, 429, 400). On the spare it is missing: the addon waits for the
   main server.
 
-Only contributors (`users.contributor = 1`, set by hand) send `manual` rows: anyone can turn the
-addon's editor on, so the others' are stored as `auto`.
+Only contributors (`users.contributor` 1, or 2 for the owner, set by hand) send `manual` rows: anyone
+can turn the addon's editor on, so the others' are stored as `auto`.
 
-Merge: a `manual` row replaces anything (the old text goes to `history`); an `auto` row is only
-stored for a text that has none. `next_s` is the wait the addon keeps between syncs: raise
+## Trust
+
+Every row has a `trust` (schema.sql), and a row only replaces one of a lower trust:
+
+| trust | what |
+|---|---|
+| 0 | machine translation sent by an addon (anyone can make one up) |
+| 1 | machine translation made by the server itself: /translate signs it (HMAC-SHA256 with a secret that stays in the server's database, crates/server/src/sign.rs); the addon keeps the signature with the translation and sends it back, and /sync makes the text again from the English and the answered XML (crates/text): a text that comes out the same is the server's own |
+| 2 | hand correction of a contributor (`contributor` 1) |
+| 3 | hand correction of the owner (`contributor` 2) |
+
+Same trust: among machine translations the first stays (so every player sees the same text), among
+hand corrections the last wins. What a stronger row replaces goes to `history`. The spare (Worker) does
+not check proofs: what addons send it is trust 0 (the owner and the contributors keep theirs).
+Every row also has its `author`: a token that makes up translations can be banned
+(`users.banned`), and what it wrote found by `author` and replaced.
+
+Merge, in short: the strongest row wins. `next_s` is the wait the addon keeps between syncs: raise
 `NEXT_S` in src/index.js if the free plan runs short.
 
 ## Self-hosted (crates/server)
@@ -89,6 +107,6 @@ GW2IT_SYNC_URL=http://localhost:8787 cargo test -p gw2it-addon against_server --
 ```sh
 npx wrangler d1 execute gw2it --remote --command "SELECT author, status, count(*) FROM translations GROUP BY 1, 2"
 npx wrangler d1 execute gw2it --remote --command "UPDATE users SET banned = 1 WHERE name = '...'"
-# a contributor (on ifalna; the spare gets it with the nightly copy)
+# a contributor, or the owner with = 2 (on ifalna; the spare gets it with the nightly copy)
 ssh ifalna "sqlite3 ~/gw2it-sync/data/gw2it.db \"UPDATE users SET contributor = 1 WHERE token_hash = '<SHA-256 of the token in their config.toml>'\""
 ```

@@ -35,6 +35,9 @@ pub struct Translated {
     pub it: String,
     /// Who made it: "deepl", "gemini", "server:deepl"...
     pub source: String,
+    /// Made by the project's server: its signature and the XML it answered, which the global
+    /// database checks to tell the server's translations from the ones an addon makes up.
+    pub proof: Option<(String, String)>,
 }
 
 /// A text as the editor shows it.
@@ -91,6 +94,14 @@ pub(crate) const SCHEMA: &str = "
         PRIMARY KEY (id, hash)
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS translations_at ON translations (at);
+    -- The server's proof of a translation it made (store::Translated), sent with it by sync.rs.
+    CREATE TABLE IF NOT EXISTS proofs (
+        id   INTEGER NOT NULL,
+        hash INTEGER NOT NULL,
+        sig  TEXT    NOT NULL,
+        raw  TEXT    NOT NULL,
+        PRIMARY KEY (id, hash)
+    ) WITHOUT ROWID;
     -- A text changed by another program (it without at) is a hand correction: keep it, and give it
     -- a new `at` so that the addon picks it up and sends it to the game.
     CREATE TRIGGER IF NOT EXISTS translations_edited AFTER UPDATE OF it ON translations
@@ -441,6 +452,8 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
                  source = excluded.source, at = excluded.at",
         )?;
         let mut forget_stmt = tx.prepare_cached("DELETE FROM translations WHERE id = ?1 AND hash = ?2")?;
+        let mut proof_stmt = tx.prepare_cached("INSERT OR REPLACE INTO proofs (id, hash, sig, raw) VALUES (?1, ?2, ?3, ?4)")?;
+        let mut forget_proof_stmt = tx.prepare_cached("DELETE FROM proofs WHERE id = ?1 AND hash = ?2")?;
         for m in batch {
             match m {
                 Msg::Seen(s) => {
@@ -452,6 +465,10 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
                 }
                 Msg::Translated(t) => {
                     auto_stmt.execute(params![t.id, t.hash as i64, t.it, t.source, now_ms()])?;
+                    match &t.proof {
+                        Some((sig, raw)) => proof_stmt.execute(params![t.id, t.hash as i64, sig, raw])?,
+                        None => forget_proof_stmt.execute(params![t.id, t.hash as i64])?,
+                    };
                     touched.push((t.id, t.hash));
                 }
                 Msg::Manual { id, hash, it, author } => {
@@ -460,6 +477,7 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
                 }
                 Msg::Forget { id, hash } => {
                     forget_stmt.execute(params![id, hash as i64])?;
+                    forget_proof_stmt.execute(params![id, hash as i64])?;
                     touched.push((id, hash));
                 }
                 Msg::Search { query, reply } => searches.push((query, reply)),

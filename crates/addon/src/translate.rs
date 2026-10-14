@@ -172,13 +172,14 @@ impl Worker {
         match self.chain.translate(&texts, &neighbours) {
             Ok(translated) => {
                 let mut rejected = 0;
-                for (q, xml) in batch.iter().zip(&translated.texts) {
+                for (i, (q, xml)) in batch.iter().zip(&translated.texts).enumerate() {
                     let Job { id, hash, en, .. } = &q.job;
                     match q.prepared.restore(xml) {
                         Some(it) => {
                             let it = plural::pluralize(en, &markup::fix_spacing(en, &it));
                             pipe::send_text(*id, *hash, &it);
-                            store::save_translation(Translated { id: *id, hash: *hash, it, source: translated.by.clone() });
+                            let proof = translated.signatures.get(i).map(|s| (s.clone(), xml.clone()));
+                            store::save_translation(Translated { id: *id, hash: *hash, it, source: translated.by.clone(), proof });
                             self.known.remove(&(*id, *hash));
                         }
                         None => {

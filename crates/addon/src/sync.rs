@@ -222,7 +222,8 @@ impl Mark {
     }
 }
 
-/// A row to send: [id, hash, en, it, status], and its place in the order of sending.
+/// A row to send: [id, hash, en, it, status] (+ the server's proof for a text it translated: the
+/// signature and the XML it answered), and its place in the order of sending.
 struct Outgoing {
     row: Value,
     at: i64,
@@ -319,15 +320,21 @@ fn post<T: DeserializeOwned>(url: &str, token: Option<&str>, body: &Value) -> Re
 /// the English goes with them, for whoever reads the global database.
 fn pending(con: &Connection, mark: Mark) -> rusqlite::Result<Vec<Outgoing>> {
     let mut stmt = con.prepare_cached(
-        "SELECT t.id, t.hash, s.en, t.it, t.status, t.at FROM translations t
+        "SELECT t.id, t.hash, s.en, t.it, t.status, t.at, p.sig, p.raw FROM translations t
          JOIN strings s ON s.id = t.id AND s.hash = t.hash
+         LEFT JOIN proofs p ON p.id = t.id AND p.hash = t.hash AND t.status = 'auto'
          WHERE t.source NOT LIKE 'cloud:%' AND (t.at, t.id, t.hash) > (?1, ?2, ?3)
          ORDER BY t.at, t.id, t.hash LIMIT ?4",
     )?;
     stmt.query_map(params![mark.at, mark.id, mark.hash, PUSH_MAX as i64], |r| {
         let (id, hash): (i64, i64) = (r.get(0)?, r.get(1)?);
         let (en, it, status): (String, String, String) = (r.get(2)?, r.get(3)?, r.get(4)?);
-        Ok(Outgoing { row: json!([id, format!("{:016x}", hash as u64), en, it, status]), at: r.get(5)?, id, hash })
+        let hash_hex = format!("{:016x}", hash as u64);
+        let row = match (r.get::<_, Option<String>>(6)?, r.get::<_, Option<String>>(7)?) {
+            (Some(sig), Some(raw)) => json!([id, hash_hex, en, it, status, sig, raw]),
+            _ => json!([id, hash_hex, en, it, status]),
+        };
+        Ok(Outgoing { row, at: r.get(5)?, id, hash })
     })?
     .collect()
 }

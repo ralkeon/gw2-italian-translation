@@ -17,9 +17,15 @@ static AGENT: LazyLock<Agent> = LazyLock::new(|| {
         .into()
 });
 
-/// The translations and who made them on the server ("deepl", "gemini"). Errors have DeepL's
-/// status codes; 401/403 is about the sync token.
-pub fn translate(url: &str, token: &str, texts: &[&str], neighbours: &str) -> Result<(Vec<String>, String), Error> {
+/// The translations, who made them on the server ("deepl", "gemini") and the server's signature of
+/// each (what /sync takes as proof that the server made it). Errors have DeepL's status codes;
+/// 401/403 is about the sync token.
+pub fn translate(
+    url: &str,
+    token: &str,
+    texts: &[&str],
+    neighbours: &str,
+) -> Result<(Vec<String>, String, Vec<String>), Error> {
     let mut response = AGENT
         .post(format!("{url}/translate"))
         .header("Authorization", format!("Bearer {token}"))
@@ -34,5 +40,11 @@ pub fn translate(url: &str, token: &str, texts: &[&str], neighbours: &str) -> Re
     if translations.len() != texts.len() {
         return Err(Error::Other(format!("{} translations for {} texts", translations.len(), texts.len())));
     }
-    Ok((translations, reply["by"].as_str().unwrap_or("deepl").to_owned()))
+    // Missing from a server without signatures: no proof.
+    let signatures: Vec<String> = reply["signatures"]
+        .as_array()
+        .map(|s| s.iter().filter_map(|s| s.as_str().map(str::to_owned)).collect())
+        .filter(|s: &Vec<String>| s.len() == texts.len())
+        .unwrap_or_default();
+    Ok((translations, reply["by"].as_str().unwrap_or("deepl").to_owned(), signatures))
 }

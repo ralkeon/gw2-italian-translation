@@ -1,0 +1,8 @@
+[package]
+name = "gw2it-text"
+description = "Italian Translation: GW2 markup round trip and Italian plurals, shared by the addon and the server (which checks the addon's translations with them)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

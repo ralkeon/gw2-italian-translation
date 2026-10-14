@@ -152,14 +152,17 @@ impl Engine {
         }
     }
 
-    fn translate(&self, texts: &[&str], neighbours: &str) -> Result<(Vec<String>, String), Error> {
+    /// The texts, who made them and the server's signatures (only from the server).
+    fn translate(&self, texts: &[&str], neighbours: &str) -> Result<(Vec<String>, String, Vec<String>), Error> {
         match self {
-            Self::Deepl { key } => deepl::translate(key, texts, neighbours).map(|t| (t, "deepl".into())),
-            Self::Azure { key, region } => azure::translate(key, region, texts).map(|t| (t, "azure".into())),
-            Self::Gemini { key, model } => gemini::translate(key, model, texts).map(|t| (t, "gemini".into())),
-            Self::OpenAi { url, key, model, .. } => openai::translate(url, key, model, texts).map(|t| (t, self.name())),
+            Self::Deepl { key } => deepl::translate(key, texts, neighbours).map(|t| (t, "deepl".into(), Vec::new())),
+            Self::Azure { key, region } => azure::translate(key, region, texts).map(|t| (t, "azure".into(), Vec::new())),
+            Self::Gemini { key, model } => gemini::translate(key, model, texts).map(|t| (t, "gemini".into(), Vec::new())),
+            Self::OpenAi { url, key, model, .. } => {
+                openai::translate(url, key, model, texts).map(|t| (t, self.name(), Vec::new()))
+            }
             Self::Server { url, token } => {
-                server::translate(url, token, texts, neighbours).map(|(t, by)| (t, format!("server:{by}")))
+                server::translate(url, token, texts, neighbours).map(|(t, by, s)| (t, format!("server:{by}"), s))
             }
         }
     }
@@ -182,6 +185,8 @@ pub struct Translated {
     pub texts: Vec<String>,
     /// "deepl", "gemini", "server:deepl"...
     pub by: String,
+    /// The server's signature of each text, when it made them; else empty.
+    pub signatures: Vec<String>,
 }
 
 impl Chain {
@@ -217,9 +222,9 @@ impl Chain {
                 continue;
             }
             match slot.engine.translate(texts, neighbours) {
-                Ok((texts, by)) => {
+                Ok((texts, by, signatures)) => {
                     *slot.paused_until.lock().unwrap() = None;
-                    return Ok(Translated { texts, by });
+                    return Ok(Translated { texts, by, signatures });
                 }
                 Err(e) => {
                     let pause = slot.engine.pause(&e);

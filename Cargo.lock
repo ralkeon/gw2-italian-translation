@@ -301,6 +301,7 @@ name = "gw2it-addon"
 version = "0.2.0"
 dependencies = [
  "gw2it-proto",
+ "gw2it-text",
  "gw2it-translate",
  "log",
  "nexus",
@@ -321,6 +322,7 @@ name = "gw2it-server"
 version = "0.2.0"
 dependencies = [
  "getrandom 0.4.3",
+ "gw2it-text",
  "gw2it-translate",
  "rusqlite",
  "serde_json",
@@ -336,6 +338,10 @@ dependencies = [
  "gw2it-proto",
  "windows-sys 0.60.2",
 ]
+
+[[package]]
+name = "gw2it-text"
+version = "0.2.0"
 
 [[package]]
 name = "gw2it-translate"
