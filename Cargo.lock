@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "gw2it-addon"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "gw2it-proto",
  "gw2it-text",
@@ -315,11 +315,11 @@ dependencies = [
 
 [[package]]
 name = "gw2it-proto"
-version = "0.2.1"
+version = "0.3.0"
 
 [[package]]
 name = "gw2it-server"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "getrandom 0.4.3",
  "gw2it-text",
@@ -333,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "gw2it-shim"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "gw2it-proto",
  "windows-sys 0.60.2",
@@ -341,11 +341,11 @@ dependencies = [
 
 [[package]]
 name = "gw2it-text"
-version = "0.2.1"
+version = "0.3.0"
 
 [[package]]
 name = "gw2it-translate"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "gw2it-text",
  "log",
