@@ -4,7 +4,7 @@
 //!
 //! This thread has its own connection to strings.db. What it writes is seen by the store thread
 //! like any other outside change (store::Watch), which keeps it in memory and sends it to the game
-//! and to map_it.db. Received rows have source 'cloud:<author>' and are never sent back.
+//! and to map_it.db if there. Received rows have source 'cloud:<author>' and are never sent back.
 //!
 //! Merge rules, the same as on the server: a hand correction replaces anything, a machine
 //! translation only replaces another machine translation. A hand correction made here and not

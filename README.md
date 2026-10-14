@@ -39,7 +39,6 @@ I dati stanno in `Guild Wars 2/addons/italian_translation/`:
 |---|---|
 | `config.toml` | impostazioni, chiavi API e chiavi del database globale (`[sync]`, `enabled = false` per spegnerlo) |
 | `strings.db` | testi del gioco e traduzioni |
-| `map_it.db` | gli stessi testi nel formato di Local Translator, da scambiare tra collaboratori |
 
 ## Compilare
 

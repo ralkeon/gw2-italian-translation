@@ -114,8 +114,12 @@ pub fn start(path: &Path) -> rusqlite::Result<Vec<Job>> {
     let con = Connection::open(path)?;
     con.execute_batch(SCHEMA)?;
     repair_auto(&con)?;
-    if let Err(e) = open_map(&con, &path.with_file_name("map_it.db")) {
-        log::error!("map_it.db: {e}");
+    // Only where it is already there: a local tool, not something the addon hands out.
+    let map = path.with_file_name("map_it.db");
+    if map.exists() {
+        if let Err(e) = open_map(&con, &map) {
+            log::error!("map_it.db: {e}");
+        }
     }
     let count: i64 = con.query_row("SELECT count(*) FROM strings", [], |r| r.get(0))?;
     SHARED.stored.store(count as u64, Ordering::Relaxed);
@@ -187,6 +191,7 @@ fn repair_auto(con: &Connection) -> rusqlite::Result<()> {
 ///   how = 'live' (seen in game);
 /// - suggestions: our hand corrections, with the contributor as author (version 0: we have no
 ///   patch version).
+/// Kept only if the file is already in the addon folder (create it empty to have it).
 /// Rebuilt at start, then updated after every write (map_refresh). Rollback-journal mode, so it is
 /// always a single complete file. Its own transactions: a problem with it never stops strings.db.
 const MAP_SCHEMA: &str = "
