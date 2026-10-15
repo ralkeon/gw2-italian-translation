@@ -19,6 +19,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use gw2it_text::names::Names;
 use gw2it_translate::{Chain, Engine};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -62,7 +63,13 @@ struct App {
     secret: Vec<u8>,
     /// key -> (start of the current minute, requests in it)
     rate: Mutex<HashMap<String, (Instant, u32)>>,
+    /// The names that stay in English (names.rs), and when they were read.
+    names: Mutex<Option<(Instant, Arc<Names>)>>,
 }
+
+/// How long the names read from the database are used before reading them again (the nightly
+/// job adds new ones).
+const NAMES_FRESH: Duration = Duration::from_secs(600);
 
 struct HttpError(u16, &'static str);
 
@@ -160,7 +167,7 @@ fn main() {
         eprintln!("cannot read the signing secret: {e}");
         std::process::exit(1);
     });
-    let app = Arc::new(App { db: Mutex::new(con), translators, secret, rate: Mutex::new(HashMap::new()) });
+    let app = Arc::new(App { db: Mutex::new(con), translators, secret, rate: Mutex::new(HashMap::new()), names: Mutex::new(None) });
     let workers: Vec<_> = (0..THREADS)
         .map(|_| {
             let (server, app) = (server.clone(), app.clone());
@@ -316,6 +323,17 @@ fn handle(app: &App, mut request: Request) {
     let _ = request.respond(Response::from_string(body.to_string()).with_status_code(status).with_header(header));
 }
 
+/// The names that stay in English, read again every `NAMES_FRESH`.
+fn english_names(app: &App, db: &Connection) -> rusqlite::Result<Arc<Names>> {
+    let mut cached = app.names.lock().unwrap();
+    if let Some((_, names)) = cached.as_ref().filter(|(at, _)| at.elapsed() < NAMES_FRESH) {
+        return Ok(names.clone());
+    }
+    let names = Arc::new(names::load(db)?);
+    *cached = Some((Instant::now(), names.clone()));
+    Ok(names)
+}
+
 pub(crate) fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
@@ -436,8 +454,9 @@ fn user(app: &App, request: &Request) -> Result<User, HttpError> {
     }
 }
 
-/// POST /sync {since, rows: [[id, hash, en, it, status]...]}
-///   -> {rows: [[id, hash, en, it, status, author, seq]...], seq, more, next_s, accepted}
+/// POST /sync {since, rows: [[id, hash, en, it, status]...], gsince, glossary, nsince}
+///   -> {rows: [[id, hash, en, it, status, author, seq]...], seq, more, next_s, accepted,
+///       glossary, gseq, gmore, names: [name...], nseq}
 fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
     let User { token_hash, name, level } = user(app, request)?;
     limit(app, format!("sync:{token_hash}"), RATE)?;
@@ -450,6 +469,7 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
         return Err(HttpError(413, "too many rows"));
     }
     let mut rows: Vec<Value> = Vec::new();
+    let names = english_names(app, &db)?;
     for (mut row, proof) in sent.iter().filter_map(valid) {
         // Anyone can write contributor.json: only the contributors' hand corrections count as such.
         // The sixth element is the author (the sender), the seventh the trust: see schema.sql.
@@ -466,6 +486,12 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
                 i64::from(server_made)
             }
         };
+        // A machine translation of a text that is a name that stays in English: the name, at once.
+        if trust <= 1
+            && let Some(name) = names.whole(row[2].as_str().unwrap_or(""))
+        {
+            row[3] = name.into();
+        }
         row.as_array_mut().unwrap().extend([Value::Null, trust.into()]);
         rows.push(row);
     }
@@ -514,8 +540,11 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
     }
     let gsince = input["gsince"].as_i64().filter(|&s| s > 0).unwrap_or(0);
     let (terms, gseq, gmore) = glossary::pull(&db, gsince)?;
+    // The names that stay in English added after `nsince`: the addon gives them as they are.
+    let nsince = input["nsince"].as_i64().unwrap_or(0);
+    let (english, nseq) = names::pull(&db, nsince)?;
     Ok(json!({
         "rows": pulled, "seq": seq, "more": more, "next_s": NEXT_S, "accepted": rows.len(),
-        "glossary": terms, "gseq": gseq, "gmore": gmore,
+        "glossary": terms, "gseq": gseq, "gmore": gmore, "names": english, "nseq": nseq,
     }))
 }

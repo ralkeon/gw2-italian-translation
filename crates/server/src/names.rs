@@ -68,6 +68,19 @@ pub fn load(con: &Connection) -> rusqlite::Result<Names> {
     Ok(Names::new(list))
 }
 
+/// The names added after `since` (unix ms), and the time of the newest (`since` if none), for /sync.
+pub fn pull(con: &Connection, since: i64) -> rusqlite::Result<(Vec<String>, i64)> {
+    let mut stmt = con.prepare_cached("SELECT name, added FROM english_names WHERE added > ?1")?;
+    let mut newest = since;
+    let mut list = Vec::new();
+    for row in stmt.query_map([since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+        let (name, added) = row?;
+        newest = newest.max(added);
+        list.push(name);
+    }
+    Ok((list, newest))
+}
+
 /// A name worth keeping: letters, spaces, apostrophes, hyphens, dots; no placeholder names.
 fn usable(name: &str) -> bool {
     let name = name.trim();
@@ -294,7 +307,7 @@ mod tests {
         con.execute_batch(SCHEMA).unwrap();
         con.execute_batch(crate::consistency::SCHEMA).unwrap();
         con.execute_batch(
-            "INSERT INTO english_names VALUES ('Signet of Rage', 'skill', 0), ('Might', 'boon', 0), ('The Dreamer', 'item', 0);
+            "INSERT INTO english_names VALUES ('Signet of Rage', 'skill', 1), ('Might', 'boon', 1), ('The Dreamer', 'item', 1);
              INSERT INTO translations (id, hash, en, it, status, author, at, seq, trust) VALUES
                (1, 'a', 'Signet of Rage', 'Sigillo della rabbia', 'auto', 'x', 0, 1, 0),
                (2, 'b', 'You gain Might.', 'Ottieni potenza.', 'auto', 'x', 0, 2, 1),
@@ -327,6 +340,18 @@ mod tests {
         assert_eq!((trust, author.as_str()), (1, "names"));
         let logged: i64 = con.query_row("SELECT count(*) FROM names_log", [], |r| r.get(0)).unwrap();
         assert_eq!(logged, 2);
+    }
+
+    #[test]
+    fn the_addons_get_the_names_added_since_their_last_sync() {
+        let con = db();
+        con.execute("INSERT INTO english_names VALUES ('Firebrand', 'specialization', 5)", []).unwrap();
+        let (mut all, newest) = pull(&con, 0).unwrap();
+        all.sort();
+        assert_eq!((all.len(), newest), (4, 5));
+        assert_eq!(pull(&con, 0).unwrap().0.len(), 4);
+        assert_eq!(pull(&con, 1).unwrap(), (vec!["Firebrand".to_owned()], 5));
+        assert_eq!(pull(&con, 5).unwrap(), (vec![], 5));
     }
 
     #[test]

@@ -17,7 +17,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use gw2it_text::glossary::{self, Learned, Term};
+use gw2it_text::{
+    glossary::{self, Learned, Term},
+    names::Names,
+};
 use rusqlite::{Connection, named_params, params};
 
 use crate::{config, markup, pipe, plural, state::SHARED, translate::Job};
@@ -86,6 +89,10 @@ static REPAIRED: Mutex<Vec<(u32, u64, String)>> = Mutex::new(Vec::new());
 /// What the corrections taught (gw2it_text::glossary), also in the glossary table.
 static GLOSSARY: Mutex<Vec<Term>> = Mutex::new(Vec::new());
 
+/// The names that stay in English (gw2it_text::names), from the global database: a text that is
+/// one is not translated.
+static NAMES: Mutex<Option<Names>> = Mutex::new(None);
+
 const SEARCH_MAX: usize = 200;
 
 pub(crate) const SCHEMA: &str = "
@@ -129,6 +136,18 @@ pub(crate) const SCHEMA: &str = "
         local INTEGER NOT NULL,       -- 1 learned here (sync.rs sends it), 0 received from the global database
         PRIMARY KEY (en, wrong)
     ) WITHOUT ROWID;
+    -- The English of the translations received from the global database (sync.rs), for the texts
+    -- the game has not shown here (they are not in `strings`): the editor finds them too.
+    CREATE TABLE IF NOT EXISTS cloud_strings (
+        id   INTEGER NOT NULL,
+        hash INTEGER NOT NULL,
+        en   TEXT    NOT NULL,
+        PRIMARY KEY (id, hash)
+    ) WITHOUT ROWID;
+    -- The names that stay in English, from the global database (sync.rs).
+    CREATE TABLE IF NOT EXISTS english_names (
+        name TEXT PRIMARY KEY
+    ) WITHOUT ROWID;
     -- A text changed by another program (it without at) is a hand correction: keep it, and give it
     -- a new `at` so that the addon picks it up and sends it to the game.
     CREATE TRIGGER IF NOT EXISTS translations_edited AFTER UPDATE OF it ON translations
@@ -152,6 +171,7 @@ pub fn start(path: &Path) -> rusqlite::Result<Vec<Job>> {
     let con = Connection::open(path)?;
     con.execute_batch(SCHEMA)?;
     *GLOSSARY.lock().unwrap() = load_glossary(&con)?;
+    load_names(&con)?;
     repair_auto(&con)?;
     // Where it is already there, or a contributor asked for it ("save_map" in contributor.json): a
     // local tool, not something the addon hands out.
@@ -212,6 +232,19 @@ fn load_glossary(con: &Connection) -> rusqlite::Result<Vec<Term>> {
         }
     }
     Ok(terms)
+}
+
+/// Reads the names that stay in English again (sync.rs saves the new ones in the table).
+pub fn load_names(con: &Connection) -> rusqlite::Result<()> {
+    let mut stmt = con.prepare("SELECT name FROM english_names")?;
+    let list: Vec<String> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    *NAMES.lock().unwrap() = Some(Names::new(list));
+    Ok(())
+}
+
+/// The name that stays in English the whole of `en` is, if it is one.
+pub fn english_name(en: &str) -> Option<String> {
+    NAMES.lock().ok()?.as_ref()?.whole(en).map(str::to_owned)
 }
 
 /// The glossary as it is now.
@@ -454,7 +487,7 @@ pub fn forget(id: u32, hash: u64) {
 }
 
 /// Texts whose English or Italian contains `query`, or whose ID is `query`; the most recently
-/// seen first. With `exact`, the whole English or Italian text is `query` (capitals too), not just
+/// seen first, then the ones of the global database the game has not shown here. With `exact`, the whole English or Italian text is `query` (capitals too), not just
 /// a part of it. Empty query: the most recently seen texts. The answer comes on the receiver.
 pub fn search(query: String, exact: bool) -> Receiver<Vec<Row>> {
     let (reply, rx) = mpsc::channel();
@@ -689,7 +722,11 @@ fn find(con: &Connection, query: &str, exact: bool) -> rusqlite::Result<Vec<Row>
     let id: Option<u32> = query.parse().ok();
     let pattern = format!("%{}%", query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
     let mut stmt = con.prepare_cached(
-        "SELECT s.id, s.hash, s.en, t.it, t.status FROM strings s
+        "SELECT s.id, s.hash, s.en, t.it, t.status
+         FROM (SELECT id, hash, en, last_seen FROM strings
+               UNION ALL
+               SELECT c.id, c.hash, c.en, 0 FROM cloud_strings c
+               WHERE NOT EXISTS (SELECT 1 FROM strings x WHERE x.id = c.id AND x.hash = c.hash)) s
          LEFT JOIN translations t ON t.id = s.id AND t.hash = s.hash
          WHERE ?1 = '' OR s.id = ?2
             OR (?5 = 0 AND (s.en LIKE ?3 ESCAPE '\\' OR t.it LIKE ?3 ESCAPE '\\'))
@@ -785,6 +822,15 @@ mod tests {
         // An ID still finds its text, and an empty search everything.
         assert_eq!(ids("2", true), [2]);
         assert_eq!(ids("", true), [1, 2, 3]);
+        // The texts of the global database the game has not shown here: after the others.
+        con.execute_batch(
+            "INSERT INTO cloud_strings VALUES (4, 4, 'Seraph Archer'), (1, 1, 'Seraph');
+             INSERT INTO translations VALUES (4, 4, 'Arciere dei Seraph', 'auto', 'cloud:Bea', 1);",
+        )
+        .unwrap();
+        assert_eq!(ids("Seraph", false), [1, 2, 3, 4]);
+        assert_eq!(ids("Arciere", false), [4]);
+        assert_eq!(find(&con, "4", true).unwrap()[0].en, "Seraph Archer");
     }
 
     #[test]

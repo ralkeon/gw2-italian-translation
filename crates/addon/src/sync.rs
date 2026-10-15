@@ -195,6 +195,12 @@ fn open(db: &Path) -> rusqlite::Result<Connection> {
     con.busy_timeout(Duration::from_secs(10))?;
     // The store thread created the tables; this one is ours.
     con.execute_batch("CREATE TABLE IF NOT EXISTS sync_state (k TEXT PRIMARY KEY, v INTEGER NOT NULL);")?;
+    // Before cloud_strings the English of what was received was not kept: everything once more.
+    con.execute_batch(
+        "DELETE FROM sync_state WHERE k IN ('seq', 'seq_spare')
+             AND NOT EXISTS (SELECT 1 FROM sync_state WHERE k = 'cloud_en');
+         INSERT OR IGNORE INTO sync_state (k, v) VALUES ('cloud_en', 1);",
+    )?;
     Ok(con)
 }
 
@@ -209,6 +215,8 @@ struct Mark {
     hash: i64,
     gseq: i64,
     gsent: i64,
+    /// The time of the newest name that stays in English received (from any server).
+    nseq: i64,
 }
 
 /// The sync_state key of the glossary's seq that goes with `seq_key`.
@@ -225,7 +233,7 @@ impl Mark {
         // from 10^12): what we had from the main server we need not get again.
         let seq = get(seq_key)?.max(get("seq")?);
         let gseq = get(&glossary_key(seq_key))?.max(get("gseq")?);
-        Ok(Self { seq, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")?, gseq, gsent: get("gsent_at")? })
+        Ok(Self { seq, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")?, gseq, gsent: get("gsent_at")?, nseq: get("nseq")? })
     }
 
     fn save(&self, tx: &Transaction, seq_key: &str) -> rusqlite::Result<()> {
@@ -238,6 +246,7 @@ impl Mark {
             ("sent_hash", self.hash),
             (gkey.as_str(), self.gseq),
             ("gsent_at", self.gsent),
+            ("nseq", self.nseq),
         ] {
             stmt.execute(params![k, v])?;
         }
@@ -275,6 +284,11 @@ struct Reply {
     gseq: i64,
     #[serde(default)]
     gmore: bool,
+    // Missing from a server without the names that stay in English.
+    #[serde(default)]
+    names: Vec<String>,
+    #[serde(default)]
+    nseq: i64,
 }
 
 /// Terms sent in one request (the server accepts up to 50).
@@ -299,7 +313,7 @@ fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Du
         let reply: Reply = post(
             &format!("{server}/sync"),
             Some(&token),
-            &json!({ "since": mark.seq, "rows": rows, "gsince": mark.gseq, "glossary": terms }),
+            &json!({ "since": mark.seq, "rows": rows, "gsince": mark.gseq, "glossary": terms, "nsince": mark.nseq }),
         )
         .map_err(refused)?;
         if let Some(last) = outgoing.last() {
@@ -308,8 +322,10 @@ fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Du
         mark.seq = mark.seq.max(reply.seq);
         mark.gsent = mark.gsent.max(terms_at);
         mark.gseq = mark.gseq.max(reply.gseq);
+        mark.nseq = mark.nseq.max(reply.nseq);
         // The glossary first: the translations that come with it are repaired with it.
         received_terms(&reply.glossary);
+        received_names(con, &reply.names)?;
         received += apply(con, &reply.rows, mark, target.seq_key())?;
         sent += outgoing.len();
         next = Duration::from_secs(reply.next_s.clamp(30, 3600));
@@ -362,12 +378,17 @@ fn post<T: DeserializeOwned>(url: &str, token: Option<&str>, body: &Value) -> Re
     }
 }
 
-/// Translations made here after `mark`, oldest first. Only texts this installation has seen:
-/// the English goes with them, for whoever reads the global database.
+/// Translations made here after `mark`, oldest first. Only texts whose English is known here (seen
+/// in the game, or received from the global database and corrected in the editor): the English
+/// goes with them, for whoever reads the global database.
 fn pending(con: &Connection, mark: Mark) -> rusqlite::Result<Vec<Outgoing>> {
     let mut stmt = con.prepare_cached(
         "SELECT t.id, t.hash, s.en, t.it, t.status, t.at, p.sig, p.raw FROM translations t
-         JOIN strings s ON s.id = t.id AND s.hash = t.hash
+         JOIN (SELECT id, hash, en FROM strings
+               UNION ALL
+               SELECT c.id, c.hash, c.en FROM cloud_strings c
+               WHERE NOT EXISTS (SELECT 1 FROM strings x WHERE x.id = c.id AND x.hash = c.hash)) s
+           ON s.id = t.id AND s.hash = t.hash
          LEFT JOIN proofs p ON p.id = t.id AND p.hash = t.hash AND t.status = 'auto'
          WHERE t.source NOT LIKE 'cloud:%' AND (t.at, t.id, t.hash) > (?1, ?2, ?3)
          ORDER BY t.at, t.id, t.hash LIMIT ?4",
@@ -428,6 +449,23 @@ fn received_terms(terms: &[RemoteTerm]) {
     store::receive_terms(valid);
 }
 
+/// The names that stay in English the server sent: kept, and used from now on (translate.rs).
+fn received_names(con: &mut Connection, names: &[String]) -> rusqlite::Result<()> {
+    if names.is_empty() {
+        return Ok(());
+    }
+    let tx = con.transaction()?;
+    {
+        let mut insert = tx.prepare_cached("INSERT OR IGNORE INTO english_names (name) VALUES (?1)")?;
+        for name in names.iter().filter(|n| n.chars().count() <= 100) {
+            insert.execute([name])?;
+        }
+    }
+    tx.commit()?;
+    log::info!("sync: {} names that stay in English", names.len());
+    store::load_names(con)
+}
+
 /// Saves the received rows and the new mark, in one transaction. Returns how many changed here.
 fn apply(con: &mut Connection, rows: &[Remote], mark: Mark, seq_key: &str) -> Result<usize, Error> {
     let tx = con.transaction()?;
@@ -435,6 +473,7 @@ fn apply(con: &mut Connection, rows: &[Remote], mark: Mark, seq_key: &str) -> Re
     let terms = store::glossary();
     {
         let mut local_en = tx.prepare_cached("SELECT en FROM strings WHERE id = ?1 AND hash = ?2")?;
+        let mut cloud_en = tx.prepare_cached("INSERT OR REPLACE INTO cloud_strings (id, hash, en) VALUES (?1, ?2, ?3)")?;
         // ?7..?9: the last row sent. A hand correction made after it is still ours alone.
         // `at` always moves forward: a new text with the same `at` would look like an outside
         // edit to the translations_edited trigger, and become a hand correction.
@@ -455,7 +494,13 @@ fn apply(con: &mut Connection, rows: &[Remote], mark: Mark, seq_key: &str) -> Re
                 continue;
             }
             // Never trust the markup of a text from outside: it must match our English.
-            let en = local_en.query_row(params![id, hash as i64], |r| r.get::<_, String>(0)).optional()?.unwrap_or_else(|| en.clone());
+            let en = match local_en.query_row(params![id, hash as i64], |r| r.get::<_, String>(0)).optional()? {
+                Some(en) => en,
+                None => {
+                    cloud_en.execute(params![id, hash as i64, en])?;
+                    en.clone()
+                }
+            };
             let mismatch = markup::token_mismatch(&en, it);
             if !mismatch.is_empty() {
                 log::warn!("sync: translation of {id} from {author} breaks the markup ({}): skipped", mismatch.join(" "));
@@ -569,6 +614,33 @@ mod tests {
         apply(&mut con, &[remote(2, "Shield", "Egida", "manual"), remote(4, "Axe", "Scure", "manual")], sent, "seq").unwrap();
         apply(&mut con, &[remote(2, "Shield", "Scudetto", "auto")], sent, "seq").unwrap();
         assert_eq!(texts(&con)[1..], [(2, "Egida".into(), "cloud:Bea".into()), (4, "Scure".into(), "cloud:Bea".into())]);
+    }
+
+    #[test]
+    fn what_is_received_can_be_found_and_corrected() {
+        let mut con = db();
+        apply(&mut con, &[remote(4, "Axe", "Ascia", "auto"), remote(1, "Sword", "Lama", "auto")], Mark::default(), "seq").unwrap();
+        // The English of a text the game has not shown here is kept; one it has shown is in `strings`.
+        let kept: Vec<(u32, String)> = {
+            let mut stmt = con.prepare("SELECT id, en FROM cloud_strings").unwrap();
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+        };
+        assert_eq!(kept, [(4, "Axe".to_owned())]);
+        // Corrected in the editor: it goes to the global database, with its English.
+        con.execute("UPDATE translations SET it = 'Scure', status = 'manual', source = 'editor:Ana', at = 50 WHERE id = 4", []).unwrap();
+        let out = pending(&con, Mark { at: 20, id: 2, hash: 2, ..Mark::default() }).unwrap();
+        assert_eq!(out.iter().map(|o| o.row.to_string()).collect::<Vec<_>>(), [r#"[4,"0000000000000004","Axe","Scure","manual"]"#]);
+    }
+
+    #[test]
+    fn names_that_stay_in_english_are_kept_and_used() {
+        let mut con = db();
+        received_names(&mut con, &["Signet of Rage".to_owned(), "Firebrand".to_owned()]).unwrap();
+        received_names(&mut con, &["Firebrand".to_owned()]).unwrap();
+        let count: i64 = con.query_row("SELECT count(*) FROM english_names", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(store::english_name("Signet of Rage").as_deref(), Some("Signet of Rage"));
+        assert_eq!(store::english_name("Signet of Rage Recharge"), None);
     }
 
     /// Against a running server: cd server && npx wrangler dev, then

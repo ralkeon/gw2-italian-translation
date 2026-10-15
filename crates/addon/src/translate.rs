@@ -145,6 +145,11 @@ impl Worker {
         if self.known.contains(&key) || store::lookup(job.id, job.hash).is_some() {
             return;
         }
+        // A name that stays in English (a skill, a trait...): the name, without asking for one.
+        if let Some(name) = store::english_name(&job.en) {
+            copy(&job, name, "names".into(), None);
+            return;
+        }
         // The same English under another ID: its translation, without asking for one.
         if !job.force
             && let Some(it) = store::lookup_same(job.hash)
