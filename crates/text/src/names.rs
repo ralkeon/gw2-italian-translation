@@ -247,9 +247,78 @@ impl Names {
     }
 }
 
+/// Words of the game's mechanics that stay in English too, in any case and in sentences, with the
+/// forms they take: Italian players say "boon" and "condi", "benedizione" is no game word.
+pub const TERMS: &[(&str, &[&str])] = &[("boon", &["boon", "boons"]), ("condition", &["condition", "conditions"])];
+
+/// Whether `s` has one of `forms` as a word, in any case.
+fn has_word(s: &str, forms: &[&str]) -> bool {
+    words(s).iter().any(|w| forms.iter().any(|f| w.text.eq_ignore_ascii_case(f)))
+}
+
+/// The terms (`TERMS`) `en` has that `it` lost.
+pub fn terms_missing(en: &str, it: &str) -> Vec<&'static str> {
+    TERMS.iter().filter(|(_, forms)| has_word(en, forms) && !has_word(it, forms)).map(|(term, _)| *term).collect()
+}
+
+/// Whether `it` elides into a term ("l'boon", "dell'condition"): none of them starts with a vowel.
+pub fn term_elided(it: &str) -> bool {
+    let lower = it.to_lowercase();
+    TERMS.iter().any(|(term, _)| lower.contains(&format!("'{term}")) || lower.contains(&format!("’{term}")))
+}
+
+/// Attributes of the terms that stay whole in English: "+100 Condition Damage".
+pub const TERM_ATTRIBUTES: &[&str] = &["Condition Damage", "Condition Duration", "Boon Duration"];
+
+/// The words of the English `en` that a rewrite `new` of the Italian `old` brought in while not
+/// part of `keep` (the names and terms to put back) nor of `TERM_ATTRIBUTES`: "+5 Precisione"
+/// become "+5 Precision" is a word translated back, not a name put back.
+pub fn english_brought_in<'a>(en: &str, old: &str, new: &'a str, keep: &[&str]) -> Vec<&'a str> {
+    let lower = |s: &str| words(s).iter().map(|w| w.text.to_lowercase()).collect::<std::collections::HashSet<_>>();
+    let (en, old) = (lower(en), lower(old));
+    let mut allowed = std::collections::HashSet::new();
+    for k in keep.iter().chain(TERM_ATTRIBUTES) {
+        allowed.extend(lower(k));
+    }
+    for (_, forms) in TERMS {
+        allowed.extend(forms.iter().map(|f| f.to_string()));
+    }
+    words(new)
+        .into_iter()
+        .map(|w| w.text)
+        .filter(|w| {
+            let l = w.to_lowercase();
+            w.chars().any(char::is_alphabetic) && en.contains(&l) && !old.contains(&l) && !allowed.contains(&l)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_names_come_back_in_english() {
+        let en = "+7 Condition Damage\n+5 Precision";
+        assert_eq!(english_brought_in(en, "+7 Danni da condizione +5 Precisione", "+7 Condition Damage\n+5 Precision", &["condition"]), ["Precision"]);
+        assert!(english_brought_in(en, "+7 Danni da condizione +5 Precisione", "+7 Condition Damage +5 Precisione", &["condition"]).is_empty());
+        let en = "<c=@abilitytype>Cantrip.</c> Gain a barrier for each boon.";
+        let old = "<c=@abilitytype>Incantesimo minore.</c> Ottieni una barriera per ogni benedizione.";
+        assert_eq!(english_brought_in(en, old, "<c=@abilitytype>Cantrip.</c> Ottieni una barriera per ogni boon.", &["boon"]), ["Cantrip"]);
+        assert!(english_brought_in(en, old, "<c=@abilitytype>Incantesimo minore.</c> Ottieni una barriera per ogni boon.", &["boon"]).is_empty());
+    }
+
+    #[test]
+    fn terms_in_any_case() {
+        assert_eq!(terms_missing("Barrier per Boon", "Barriera per benedizione"), ["boon"]);
+        assert!(terms_missing("Barrier per Boon", "Barriera per boon").is_empty());
+        assert_eq!(terms_missing("Removes boons and conditions.", "Rimuove i boon e le condizioni."), ["condition"]);
+        assert!(terms_missing("Gain Might.", "Ottieni potenza.").is_empty());
+        // A word that only starts like one is another word.
+        assert!(terms_missing("Boonless foes", "Nemici").is_empty());
+        assert!(term_elided("Rimuove l'boon"));
+        assert!(!term_elided("Rimuove il boon"));
+    }
 
     fn names() -> Names {
         Names::new([

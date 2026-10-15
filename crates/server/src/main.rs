@@ -243,11 +243,12 @@ fn run_names(db: &str, fetch: bool, translators_file: Option<&str>, max_texts: u
     let ask: Option<&names::Ask> = if chain.is_empty() { None } else { Some(&ask) };
     match names::run(&con, ask, &names::Options { dry_run, max_texts }) {
         Ok(r) => println!(
-            "names: {} texts that are a name, {} with one inside, {} rewritten, {} failed, {} hand corrections without their name{}{}",
+            "names: {} texts that are a name, {} with one inside, {} rewritten, {} failed, {} not the mechanic, {} hand corrections without their name{}{}",
             r.whole,
             r.inside,
             r.rewritten,
             r.failed,
+            r.skipped,
             r.manual,
             if dry_run { " (dry run: nothing changed)" } else { "" },
             r.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),

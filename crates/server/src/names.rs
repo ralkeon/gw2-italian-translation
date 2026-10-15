@@ -9,10 +9,16 @@
 //!   names as placeholders scrambles the sentence around them). What it answers is checked: the
 //!   names there, the markup of the English. Hand corrections are only counted. Every rewrite goes
 //!   into `history` and `names_log`, and to the addons with /sync.
+//! - The words of the mechanics in `gw2it_text::names::TERMS` (boon, condition) are put back the
+//!   same way, in any case; where the model says the word is not the mechanic ("a great boon" of
+//!   a dialogue) the text goes into `names_skip`, not asked again while it stays the same.
 
 use std::time::Duration;
 
-use gw2it_text::{markup, names::Names};
+use gw2it_text::{
+    markup,
+    names::{self, Names},
+};
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use ureq::Agent;
@@ -33,6 +39,13 @@ CREATE TABLE IF NOT EXISTS names_log (
     old  TEXT    NOT NULL,
     new  TEXT    NOT NULL,
     at   INTEGER NOT NULL
+);
+-- Texts where a word of TERMS is not the game's mechanic, as the model said: left as they are.
+CREATE TABLE IF NOT EXISTS names_skip (
+    id   INTEGER NOT NULL,
+    hash TEXT    NOT NULL,
+    it   TEXT    NOT NULL,
+    PRIMARY KEY (id, hash)
 );";
 
 const API: &str = "https://api.guildwars2.com/v2";
@@ -58,6 +71,8 @@ of other languages. Rewrite the Italian changing only what is needed: put each E
 Italian translation is, and fix only the words right around it (articles, prepositions: \"l'Elisir B\" \
 becomes \"l'Elixir B\"). Do not translate anything again, do not change the rest. Keep every %token%, \
 every <tag>, every [tag] and every line break exactly as they are.
+
+The lowercase words in \"keep\" are words of the game's mechanics: \"boon\" (benedizione, vantaggio) and \"condition\" (condizione, alterazione). Use the English word wherever the Italian translated it, as an Italian loanword: it does not change in the plural (\"i boon\", \"le condition\"; \"boon\" is masculine, \"condition\" feminine), it is lowercase in a sentence and capitalised in a title or label (\"Barriera per Boon\"), and it is never elided (\"il boon\", \"della condition\", never \"l'boon\"). The attributes \"Condition Damage\", \"Condition Duration\" and \"Boon Duration\" stay whole in English (\"+100 Condition Damage\"). Nothing else goes back to English: other attributes (Precisione, Vitalità, Potenza), skill types and labels (\"Incantesimo minore.\", \"Passiva del Sigillo:\") stay as the Italian has them. If in a text the word is not the mechanic (\"your help was a great boon\", \"in good condition\"), answer {\"n\": <n>, \"skip\": true} for it instead.
 
 Answer with JSON: {\"texts\": [{\"n\": <the text's n>, \"it\": \"<the fixed Italian>\"}]}";
 
@@ -168,6 +183,8 @@ pub struct Report {
     pub rewritten: usize,
     /// The model gave no fix that keeps the names and the markup: left as they are.
     pub failed: usize,
+    /// The model said a word of TERMS is not the mechanic there.
+    pub skipped: usize,
     /// Hand corrections without a name: only counted.
     pub manual: usize,
     pub stopped: Option<String>,
@@ -189,6 +206,20 @@ struct Row {
     it: String,
 }
 
+/// What `it` must keep of `en`: the names, as written in `en`, and the terms.
+fn keep<'a>(names: &Names, en: &'a str, it: &str) -> Vec<&'a str> {
+    let mut out = names.missing(en, it);
+    out.extend(names::terms_missing(en, it));
+    out
+}
+
+/// The text, if the whole of `en` is a name or a term ("Boons"): it stays as it is.
+fn whole(names: &Names, en: &str) -> Option<String> {
+    let en = en.trim();
+    let term = names::TERMS.iter().any(|(_, forms)| forms.iter().any(|f| en.eq_ignore_ascii_case(f)));
+    names.whole(en).map(str::to_owned).or_else(|| term.then(|| en.to_owned()))
+}
+
 /// Whether every name of `en` that `it` elides into ("l'Elixir B") starts with a vowel: "l'Toss
 /// Elixir H" is not Italian.
 fn elided_well(names: &Names, en: &str, it: &str) -> bool {
@@ -201,6 +232,10 @@ fn elided_well(names: &Names, en: &str, it: &str) -> bool {
 pub fn run(con: &Connection, ask: Option<&Ask>, options: &Options) -> rusqlite::Result<Report> {
     let names = load(con)?;
     let mut report = Report::default();
+    let skip: std::collections::HashSet<(i64, String, String)> = {
+        let mut stmt = con.prepare("SELECT id, hash, it FROM names_skip")?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?
+    };
     let rows: Vec<(Row, i64)> = {
         let mut stmt = con.prepare("SELECT id, hash, en, it, trust FROM translations ORDER BY id, hash")?;
         stmt.query_map([], |r| Ok((Row { id: r.get(0)?, hash: r.get(1)?, en: r.get(2)?, it: r.get(3)? }, r.get(4)?)))?
@@ -209,14 +244,14 @@ pub fn run(con: &Connection, ask: Option<&Ask>, options: &Options) -> rusqlite::
     let mut done: Vec<(&Row, String)> = Vec::new();
     let mut todo: Vec<&Row> = Vec::new();
     for (row, trust) in &rows {
-        if names.missing(&row.en, &row.it).is_empty() {
+        if keep(&names, &row.en, &row.it).is_empty() || skip.contains(&(row.id, row.hash.clone(), row.it.clone())) {
             continue;
         }
         if *trust >= 2 {
             report.manual += 1;
-        } else if let Some(name) = names.whole(&row.en) {
+        } else if let Some(name) = whole(&names, &row.en) {
             report.whole += 1;
-            done.push((row, name.to_owned()));
+            done.push((row, name));
         } else {
             report.inside += 1;
             todo.push(row);
@@ -230,7 +265,7 @@ pub fn run(con: &Connection, ask: Option<&Ask>, options: &Options) -> rusqlite::
             let texts: Vec<Value> = chunk
                 .iter()
                 .enumerate()
-                .map(|(n, r)| json!({ "n": n, "en": r.en, "it": r.it, "keep": names.missing(&r.en, &r.it) }))
+                .map(|(n, r)| json!({ "n": n, "en": r.en, "it": r.it, "keep": keep(&names, &r.en, &r.it) }))
                 .collect();
             let answer = match ask(SYSTEM, &json!({ "texts": texts }).to_string()) {
                 Ok(answer) => answer,
@@ -240,19 +275,35 @@ pub fn run(con: &Connection, ask: Option<&Ask>, options: &Options) -> rusqlite::
                 }
             };
             let mut fixed = vec![None; chunk.len()];
+            let mut skipped = vec![false; chunk.len()];
             for t in answer["texts"].as_array().map(Vec::as_slice).unwrap_or_default() {
-                if let (Some(n), Some(it)) = (t["n"].as_u64(), t["it"].as_str())
-                    && let Some(slot) = fixed.get_mut(n as usize)
-                {
-                    *slot = Some(it.to_owned());
+                let Some(n) = t["n"].as_u64().map(|n| n as usize).filter(|&n| n < chunk.len()) else { continue };
+                if let Some(it) = t["it"].as_str() {
+                    fixed[n] = Some(it.to_owned());
+                } else if t["skip"] == true {
+                    skipped[n] = true;
                 }
             }
-            for (row, it) in chunk.iter().zip(fixed) {
+            for ((row, it), skipped) in chunk.iter().zip(fixed).zip(skipped) {
+                // Only a text whose names are fine may be skipped: the names are no guess.
+                if skipped && it.is_none() && names.missing(&row.en, &row.it).is_empty() {
+                    report.skipped += 1;
+                    eprintln!("names: {} {:?}: not the mechanic, skipped", row.id, row.en);
+                    if !options.dry_run {
+                        con.execute(
+                            "INSERT OR REPLACE INTO names_skip (id, hash, it) VALUES (?1, ?2, ?3)",
+                            params![row.id, row.hash, row.it],
+                        )?;
+                    }
+                    continue;
+                }
                 let usable = it.filter(|it| {
                     *it != row.it
                         && !it.trim().is_empty()
                         && it.chars().count() <= TEXT_MAX
-                        && names.missing(&row.en, it).is_empty()
+                        && keep(&names, &row.en, it).is_empty()
+                        && !names::term_elided(it)
+                        && names::english_brought_in(&row.en, &row.it, it, &keep(&names, &row.en, &row.it)).is_empty()
                         && markup::token_mismatch(&row.en, it).is_empty()
                         && elided_well(&names, &row.en, it)
                         && row.it.contains("[pl:") == it.contains("[pl:")
@@ -340,6 +391,41 @@ mod tests {
         assert_eq!((trust, author.as_str()), (1, "names"));
         let logged: i64 = con.query_row("SELECT count(*) FROM names_log", [], |r| r.get(0)).unwrap();
         assert_eq!(logged, 2);
+    }
+
+    #[test]
+    fn boons_and_conditions_stay_in_english_where_they_are_the_mechanic() {
+        let con = db();
+        con.execute_batch(
+            "DELETE FROM translations;
+             INSERT INTO translations (id, hash, en, it, status, author, at, seq, trust) VALUES
+               (5, 'e', 'Barrier per Boon', 'Barriera per benedizione', 'auto', 'x', 0, 5, 1),
+               (6, 'f', 'Your help was a great boon.', 'Il tuo aiuto è stato una grande benedizione.', 'auto', 'x', 0, 6, 1),
+               (7, 'g', 'Boons', 'Benedizioni', 'auto', 'x', 0, 7, 1),
+               (8, 'h', 'Removes conditions.', 'Rimuove le condizioni.', 'auto', 'x', 0, 8, 1);",
+        )
+        .unwrap();
+        let ask = |_: &str, user: &str| -> Result<Value, String> {
+            assert!(user.contains(r#""keep":["boon"]"#) && user.contains(r#""keep":["condition"]"#), "{user}");
+            Ok(json!({"texts": [
+                {"n": 0, "it": "Barriera per Boon"},
+                {"n": 1, "skip": true},
+                {"n": 2, "it": "Rimuove l'condition."},
+            ]}))
+        };
+        let report = run(&con, Some(&ask), &Options { dry_run: false, max_texts: 10 }).unwrap();
+        assert_eq!((report.whole, report.inside, report.rewritten, report.skipped, report.failed), (1, 3, 2, 1, 1));
+        assert_eq!(it(&con, 5), "Barriera per Boon");
+        assert_eq!(it(&con, 7), "Boons");
+        // Elided: refused.
+        assert_eq!(it(&con, 8), "Rimuove le condizioni.");
+        // The skipped text is not asked again.
+        let never = |_: &str, user: &str| -> Result<Value, String> {
+            assert!(!user.contains("great boon"), "{user}");
+            Ok(json!({"texts": []}))
+        };
+        let report = run(&con, Some(&never), &Options { dry_run: false, max_texts: 10 }).unwrap();
+        assert_eq!((report.inside, report.skipped), (1, 0));
     }
 
     #[test]
