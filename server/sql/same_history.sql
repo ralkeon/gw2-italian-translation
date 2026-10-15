@@ -9,11 +9,11 @@ WITH touched AS (
     SELECT * FROM (
         SELECT c.*, row_number() OVER (PARTITION BY c.hash, c.en ORDER BY c.trust >= 2 DESC,
                    CASE WHEN c.trust >= 2 THEN c.rows_with_it ELSE 0 END DESC, c.trust DESC,
-                   CASE WHEN c.trust >= 2 THEN -c.seq ELSE c.seq END) AS r
+                   c.rows_with_it DESC, CASE WHEN c.trust >= 2 THEN -c.seq ELSE c.seq END) AS r
         FROM counted c
     ) WHERE r = 1
 )
 INSERT INTO history (id, hash, it, status, author, at, replaced_by, replaced_at)
 SELECT t.id, t.hash, t.it, t.status, t.author, t.at, b.author, ?3
 FROM translations t JOIN best b ON b.hash = t.hash AND b.en = t.en
-WHERE t.trust < 2 AND t.trust < b.trust AND t.it <> b.it;
+WHERE t.trust < 2 AND t.trust <= b.trust AND t.it <> b.it;

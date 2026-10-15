@@ -116,6 +116,13 @@ assert.deepEqual(torch().map((r) => r[1]), ["Torcia!", "Torcia di Cia", "Torcia 
 // A new machine translation gets the general one, the text most hand corrections have.
 push("Ana", [[26, T, "Torch", "Fiaccola", "auto", null, 0]]);
 assert.deepEqual(torch()[5], [26, "Torcia di Cia", "manual", "Cia", 2]);
+// Machine translations of one English as strong as each other: the text most of them have, then
+// the first.
+const U = "00000000000000dd";
+const shadows = () => db.prepare("SELECT it FROM translations WHERE hash = ? ORDER BY id").all(U).map((r) => r.it);
+push("Ana", [[30, U, "Hide in Shadows", "Nasconditi tra le ombre", "auto", null, 0]]);
+push("Bea", [[31, U, "Hide in Shadows", "Nasconditi nell'ombra", "auto", null, 0]]);
+assert.deepEqual(shadows(), ["Nasconditi tra le ombre", "Nasconditi tra le ombre"]);
 // A row with another hash is not the same text.
 push("Bea", [[25, "00000000000000cc", "Torch", "Fiaccola", "auto", null, 0]]);
 assert.equal(text(25).it, "Fiaccola");
