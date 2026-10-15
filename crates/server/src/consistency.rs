@@ -122,12 +122,17 @@ pub struct Options {
     pub max_groups: usize,
     /// Ask and check, but change nothing.
     pub dry_run: bool,
+    /// The hand corrections too, once, to settle what was there before the job (`--include-manual`):
+    /// they are rewritten like the machine translations (still hand corrections, same author and
+    /// trust), the English name beats their Italian one, and the term goes into the glossary
+    /// above the contributors' (trust 3).
+    pub include_manual: bool,
 }
 
-/// A text the job may rewrite: a machine translation, with no plural marks (`[pl:"..."]`, made by
-/// the addon from the singular: a rewrite would break them).
-fn editable(entry: &Entry) -> bool {
-    entry.trust <= 1 && !entry.it.contains("[pl:") && !entry.it.contains("[s]")
+/// A text the job may rewrite: a machine translation (any text with `include_manual`), with no
+/// plural marks (`[pl:"..."]`, made by the addon from the singular: a rewrite would break them).
+fn editable(entry: &Entry, include_manual: bool) -> bool {
+    (entry.trust <= 1 || include_manual) && !entry.it.contains("[pl:") && !entry.it.contains("[s]")
 }
 
 fn load(con: &Connection) -> rusqlite::Result<Vec<Entry>> {
@@ -141,7 +146,7 @@ fn load(con: &Connection) -> rusqlite::Result<Vec<Entry>> {
 /// Up to `ITEMS_MAX` texts of the group: every form is there, hand corrections first.
 fn sample(group: &Group, entries: &[Entry]) -> Vec<usize> {
     let mut chosen: Vec<usize> = group.entries.clone();
-    chosen.sort_by_key(|&i| (editable(&entries[i]), i));
+    chosen.sort_by_key(|&i| (entries[i].trust <= 1, i));
     chosen.truncate(ITEMS_MAX);
     chosen.sort_unstable();
     chosen
@@ -295,11 +300,13 @@ fn settle(
     options: &Options,
 ) -> rusqlite::Result<Outcome> {
     let chosen = sample(group, entries);
-    let existing = glossary_term(con, &group.word)?;
+    let all = options.include_manual;
+    // Reviewing the hand corrections too: the English name beats the translators' Italian one.
+    let existing = if all { None } else { glossary_term(con, &group.word)? };
     let texts: Vec<Value> = chosen
         .iter()
         .enumerate()
-        .map(|(n, &i)| json!({ "n": n, "en": entries[i].en, "it": entries[i].it, "editable": editable(&entries[i]) }))
+        .map(|(n, &i)| json!({ "n": n, "en": entries[i].en, "it": entries[i].it, "editable": editable(&entries[i], all) }))
         .collect();
     let user = json!({ "word": group.word, "glossary": existing.as_ref().map(|(it, _)| it), "texts": texts }).to_string();
     let answer = match ask(SYSTEM, &user) {
@@ -330,7 +337,7 @@ fn settle(
             continue;
         };
         let entry = &entries[i];
-        let usable = editable(entry)
+        let usable = editable(entry, all)
             && new != entry.it
             && !new.trim().is_empty()
             && new.chars().count() <= TEXT_MAX
@@ -370,12 +377,16 @@ fn settle(
                  SELECT id, hash, it, status, author, at, ?3, ?4 FROM translations WHERE id = ?1 AND hash = ?2",
                 params![entry.id, entry.hash, AUTHOR, now],
             )?;
-            // Only if it is still what the model saw, and still a machine translation.
+            // Only if it is still what the model saw, and still a machine translation (unless
+            // `include_manual`: a hand correction stays one, with its author and trust).
             let changed = con.execute(
-                "UPDATE translations SET it = ?3, status = 'auto', author = ?4, at = ?5, trust = 1,
+                "UPDATE translations SET it = ?3, at = ?5,
+                     status = CASE WHEN trust >= 2 THEN status ELSE 'auto' END,
+                     author = CASE WHEN trust >= 2 THEN author ELSE ?4 END,
+                     trust = CASE WHEN trust >= 2 THEN trust ELSE 1 END,
                      seq = (SELECT coalesce(max(seq), 0) FROM translations) + 1
-                 WHERE id = ?1 AND hash = ?2 AND it = ?6 AND trust <= 1",
-                params![entry.id, entry.hash, new, AUTHOR, now, entry.it],
+                 WHERE id = ?1 AND hash = ?2 AND it = ?6 AND (trust <= 1 OR ?7)",
+                params![entry.id, entry.hash, new, AUTHOR, now, entry.it, all],
             )?;
             if changed > 0 {
                 con.execute(
@@ -385,7 +396,7 @@ fn settle(
             }
         }
         let said = Term { en: group.word.clone(), it: term, wrong };
-        set = glossary::put(con, &said, AUTHOR, 1, now, 0)?;
+        set = glossary::put(con, &said, AUTHOR, if all { 3 } else { 1 }, now, 0)?;
     }
     Ok(Outcome::Rewrote { texts: done.len(), term: set })
 }
@@ -434,7 +445,7 @@ mod tests {
                 {"n": 9, "it": "Nowhere dei Serafini"},        // not a text of the group
             ]
         }));
-        let report = run(&con, &ask, &Options { max_groups: 5, dry_run: false }).unwrap();
+        let report = run(&con, &ask, &Options { max_groups: 5, dry_run: false, include_manual: false }).unwrap();
         assert_eq!((report.checked, report.rewritten, report.terms), (1, 1, 1), "{report:?}");
         assert_eq!(it(&con, 2), "Soldato dei Serafini");
         assert_eq!(it(&con, 5), "Arciere Serafini");
@@ -466,7 +477,7 @@ mod tests {
             *calls.borrow_mut() += 1;
             Ok(if system == CLASSIFY { json!({"names": ["seraph"]}) } else { json!({"consistent": true}) })
         };
-        let options = Options { max_groups: 5, dry_run: false };
+        let options = Options { max_groups: 5, dry_run: false, include_manual: false };
         assert_eq!(run(&con, &ask, &options).unwrap().consistent, 1);
         assert_eq!(run(&con, &ask, &options).unwrap().checked, 0);
         // Once whether it is a name, once about its forms.
@@ -485,12 +496,12 @@ mod tests {
             "consistent": false, "term": "Serafini",
             "rewrites": [{"n": 1, "it": "Soldato dei Serafini"}, {"n": 4, "it": "Arciere dei Serafim"}]
         }));
-        let dry = run(&con, &ask, &Options { max_groups: 5, dry_run: true }).unwrap();
+        let dry = run(&con, &ask, &Options { max_groups: 5, dry_run: true, include_manual: false }).unwrap();
         assert_eq!(dry.rewritten, 1, "only the text with the translators' form");
         assert_eq!(it(&con, 2), "Soldato Serafino");
         let state: i64 = con.query_row("SELECT count(*) FROM consistency_state", [], |r| r.get(0)).unwrap();
         assert_eq!(state, 0);
-        run(&con, &ask, &Options { max_groups: 5, dry_run: false }).unwrap();
+        run(&con, &ask, &Options { max_groups: 5, dry_run: false, include_manual: false }).unwrap();
         assert_eq!(it(&con, 5), "Arciere dei Serafim");
         assert_eq!(it(&con, 2), "Soldato Serafino");
     }
@@ -504,7 +515,7 @@ mod tests {
             assert!(system != CLASSIFY || user.contains("Seraph Guard"), "examples go with the word: {user}");
             Ok(if system == CLASSIFY { json!({"names": []}) } else { json!({"consistent": false, "term": "Serafini"}) })
         };
-        let options = Options { max_groups: 5, dry_run: false };
+        let options = Options { max_groups: 5, dry_run: false, include_manual: false };
         let report = run(&con, &ask, &options).unwrap();
         assert_eq!((report.classified, report.names, report.checked), (1, 0, 0));
         run(&con, &ask, &options).unwrap();
@@ -513,10 +524,40 @@ mod tests {
     }
 
     #[test]
+    fn with_include_manual_the_hand_corrections_follow_the_english_name_too() {
+        let con = db();
+        // The translators' Italian form, which the English one beats in this run.
+        glossary::put(&con, &Term { en: "seraph".into(), it: "Serafini".into(), wrong: vec![] }, "Ana", 3, 1, 0).unwrap();
+        let ask = model(json!({
+            "consistent": false, "term": "Seraph", "wrong": ["Serafini", "Serafino"],
+            "rewrites": [
+                {"n": 0, "it": "Guardia dei Seraph"},   // the owner's hand correction
+                {"n": 1, "it": "Soldato dei Seraph"},   // machine
+                {"n": 3, "it": "Mago dei Seraph"},      // a contributor's hand correction
+            ]
+        }));
+        let report = run(&con, &ask, &Options { max_groups: 5, dry_run: false, include_manual: true }).unwrap();
+        assert_eq!(report.rewritten, 3, "{report:?}");
+        let row = |id: i64| -> (String, String, String, i64) {
+            con.query_row("SELECT it, status, author, trust FROM translations WHERE id = ?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .unwrap()
+        };
+        // Still hand corrections, by the same people; the machine one is the job's.
+        assert_eq!(row(1), ("Guardia dei Seraph".into(), "manual".into(), "Ana".into(), 3));
+        assert_eq!(row(4), ("Mago dei Seraph".into(), "manual".into(), "Cia".into(), 2));
+        assert_eq!(row(2), ("Soldato dei Seraph".into(), "auto".into(), "consistency".into(), 1));
+        // The English name is the glossary's now, above the contributors.
+        let (it, trust): (String, i64) = con.query_row("SELECT it, trust FROM glossary", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((it.as_str(), trust), ("Seraph", 3));
+    }
+
+    #[test]
     fn running_out_of_quota_stops_the_run() {
         let con = db();
         let ask = |_: &str, _: &str| Err(Failure::Stop("quota".into()));
-        let report = run(&con, &ask, &Options { max_groups: 5, dry_run: false }).unwrap();
+        let report = run(&con, &ask, &Options { max_groups: 5, dry_run: false, include_manual: false }).unwrap();
         assert_eq!(report.stopped.as_deref(), Some("quota"));
         assert_eq!(it(&con, 2), "Soldato Serafino");
     }

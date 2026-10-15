@@ -6,7 +6,7 @@
 //! gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
 //!              [--translators translators.json]   (see translate.rs)
 //! gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>   (see replicate.rs)
-//! gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run]
+//! gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
 //!                                                                         (see consistency.rs)
 
 use std::{
@@ -73,7 +73,7 @@ impl From<rusqlite::Error> for HttpError {
 const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
                     [--translators translators.json]
        gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>
-       gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run]";
+       gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -83,7 +83,8 @@ fn main() {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
-    args.retain(|a| a != "--dry-run");
+    let include_manual = args.iter().any(|a| a == "--include-manual");
+    args.retain(|a| a != "--dry-run" && a != "--include-manual");
     let mut options = HashMap::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -124,7 +125,7 @@ fn main() {
             std::process::exit(2);
         };
         let max_groups = options.remove("--max-groups").and_then(|n| n.parse().ok()).unwrap_or(15);
-        run_consistency(&db, &file, max_groups, dry_run);
+        run_consistency(&db, &file, max_groups, dry_run, include_manual);
         return;
     }
     let listen = options.remove("--listen").unwrap_or_else(|| "127.0.0.1:8790".into());
@@ -166,7 +167,7 @@ fn main() {
 
 /// The nightly consistency job (consistency.rs): the language models of translators.json settle the
 /// English words that the translations render in more than one way.
-fn run_consistency(db: &str, translators_file: &str, max_groups: usize, dry_run: bool) {
+fn run_consistency(db: &str, translators_file: &str, max_groups: usize, dry_run: bool, include_manual: bool) {
     let mut chain = Chain::default();
     chain.set(translators(translators_file));
     let con = open(db).unwrap_or_else(|e| {
@@ -179,7 +180,7 @@ fn run_consistency(db: &str, translators_file: &str, max_groups: usize, dry_run:
             e => consistency::Failure::Stop(e.to_string()),
         })
     };
-    match consistency::run(&con, &ask, &consistency::Options { max_groups, dry_run }) {
+    match consistency::run(&con, &ask, &consistency::Options { max_groups, dry_run, include_manual }) {
         Ok(report) => {
             println!(
                 "consistency: {} groups, {} words classified ({} names), {} looked at, {} consistent, {} texts rewritten, {} terms{}{}",
