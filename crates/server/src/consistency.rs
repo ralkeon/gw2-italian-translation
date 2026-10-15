@@ -98,9 +98,11 @@ their form. If \"glossary\" is given, it is the form the translators chose: use 
 - Rewrite only texts with \"editable\": true, and only what is needed. Keep every %token%, every \
 <tag>...</tag> and every line break exactly as they are; keep names that are left in English.
 - Natural Italian, as in a video game.
+- The word can be part of different names (\"Thunderhead Peaks\" and \"Thunderhead Keep\" are two places; \
+\"Jahai\" alone is not \"Jahai Bluffs\"): never put into a text a word of a name that its English does not have.
 
-Answer with JSON: {\"consistent\": false, \"term\": \"<the Italian form of the word, as it appears in the \
-texts, e.g. Serafini>\", \"wrong\": [\"<each other form of the word in the texts that is a mistake, \
+Answer with JSON: {\"consistent\": false, \"term\": \"<the form of the word alone, ONE word as it appears in \
+the texts, e.g. Seraph or Serafini; never a longer name like Picchi di Thunderhead>\",\"wrong\": [\"<each other form of the word in the texts that is a mistake, \
 e.g. Serafino; never a form grammar asks for>\"], \"rewrites\": [{\"n\": <the text's n>, \"it\": \"<the \
 new Italian text>\"}]}";
 

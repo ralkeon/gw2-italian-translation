@@ -135,6 +135,8 @@ mod tests {
             json!(["seraph", "Serafini", ["a\nb"]]),
             json!(["se", "Serafini", []]),
             json!(["seraph", "Serafini"]),
+            // A wrong form inside the Italian: `fix` would grow it at every pass.
+            json!(["jahai", "Scogliere di Jahai", ["jahai"]]),
         ] {
             assert!(term_of(&bad).is_none(), "{bad}");
         }

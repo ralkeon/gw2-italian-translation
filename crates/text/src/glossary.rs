@@ -57,8 +57,15 @@ impl Term {
             && self.en == self.en.to_lowercase()
             && plain(&self.it)
             && self.wrong.len() <= WRONG_MAX
-            && self.wrong.iter().all(|w| plain(w))
+            && self.wrong.iter().all(|w| plain(w) && !has_words(&self.it, w))
     }
+}
+
+/// Whether the words of `part` are in `text`, one after the other (ignoring case). A wrong form
+/// inside the Italian ("Jahai" in "Scogliere di Jahai") would be replaced again at every `fix`.
+fn has_words(text: &str, part: &str) -> bool {
+    let (text, part): (Vec<String>, Vec<String>) = (words(text).iter().map(lower).collect(), words(part).iter().map(lower).collect());
+    !part.is_empty() && text.windows(part.len()).any(|w| w == part.as_slice())
 }
 
 /// `term` after a contributor of `trust` said `incoming` about the same English word, given what is

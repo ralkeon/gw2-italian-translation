@@ -105,11 +105,13 @@ fn like(word: &str, w: &str) -> bool {
     common_prefix(word, w) >= SHARED_MIN.min(word.chars().count())
 }
 
-/// Whether `term`, the form chosen for the English `word`, is a name (a capital first) with the
-/// word in it or an Italian word that looks like it: "Serafini" for "seraph", not "sfaccettatura"
-/// for "aurene", nor "d'acciaio di Deldrimor".
+/// Whether `term`, the form chosen for the English `word`, is one name (a capital first) that is
+/// the word or an Italian word that looks like it: "Serafini" for "seraph", not "sfaccettatura"
+/// for "aurene", nor "d'acciaio di Deldrimor". One word only: the glossary ties the term to the
+/// English word wherever it is, and "Picchi di Thunderhead" is wrong for Thunderhead Keep.
 pub fn term_fits(word: &str, term: &str) -> bool {
-    term.chars().next().is_some_and(char::is_uppercase) && words(term).iter().any(|w| like(word, w.text))
+    let found = words(term);
+    term.chars().next().is_some_and(char::is_uppercase) && found.len() == 1 && like(word, found[0].text)
 }
 
 /// Whether rewriting `old` (the Italian of `en`) as `new` only fixes how it renders the name `word`
@@ -147,8 +149,11 @@ mod tests {
     #[test]
     fn a_term_and_a_rewrite_only_about_the_name() {
         assert!(term_fits("seraph", "Serafini"));
-        assert!(term_fits("legion", "Legione della Fiamma"));
-        assert!(term_fits("kaineng", "New Kaineng City"));
+        assert!(term_fits("kaineng", "Kaineng"));
+        // The word alone: Flame Legion and Iron Legion, Thunderhead Peaks and Thunderhead Keep.
+        assert!(!term_fits("legion", "Legione della Fiamma"));
+        assert!(!term_fits("kaineng", "New Kaineng City"));
+        assert!(!term_fits("thunderhead", "Picchi di Thunderhead"));
         assert!(!term_fits("aurene", "sfaccettatura"));
         assert!(!term_fits("exalted", "Esaltati"));
         assert!(!term_fits("deldrimor", "d'acciaio di Deldrimor"));
