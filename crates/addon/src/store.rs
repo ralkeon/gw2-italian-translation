@@ -331,7 +331,7 @@ fn repair_auto(con: &Connection) -> rusqlite::Result<()> {
 /// lt_server.KeyMap), kept next to strings.db so it can be sent to him and merged with his
 /// tools/unisci_contributi.py:
 /// - texts: one row per string ID with its newest English, our translation (NULL if none) and
-///   how = 'live' (seen in game);
+///   how = 'api-<addon version>' (seen in game, by the version that wrote the file);
 /// - suggestions: our hand corrections, with the contributor as author (version 0: we have no
 ///   patch version).
 /// Kept only if the file is already in the addon folder (create it empty to have it) or
@@ -345,7 +345,7 @@ const MAP_SCHEMA: &str = "
         key INTEGER PRIMARY KEY NOT NULL,
         en TEXT NOT NULL,
         it TEXT,
-        how TEXT,          -- 'live' (seen while playing), 'contrib...' (merged from a contributor)
+        how TEXT,          -- 'api-0.3.2' (seen while playing, this addon's version), 'contrib...' (merged from a contributor)
         seen INTEGER);
     CREATE TABLE IF NOT EXISTS map.suggestions (
         id         INTEGER PRIMARY KEY,   -- order of the saves: the last of a key is the one in use
@@ -361,10 +361,16 @@ const MAP_SCHEMA: &str = "
 ";
 
 /// Rows of map.texts / map.suggestions from strings + translations; `{where}` picks the strings.
-const MAP_TEXTS: &str = "INSERT OR REPLACE INTO map.texts (key, en, it, how, seen)
-    SELECT s.id, s.en, t.it, 'live', s.last_seen / 1000
+/// how = 'api-<version>': where the texts come from (this addon, which reads them from the game) and
+/// which version of it wrote them, for whoever merges the file.
+const MAP_TEXTS: &str = concat!(
+    "INSERT OR REPLACE INTO map.texts (key, en, it, how, seen)
+    SELECT s.id, s.en, t.it, 'api-",
+    env!("CARGO_PKG_VERSION"),
+    "', s.last_seen / 1000
     FROM main.strings s LEFT JOIN main.translations t ON t.id = s.id AND t.hash = s.hash
-    WHERE {where}";
+    WHERE {where}"
+);
 const MAP_SUGGESTIONS: &str = "INSERT INTO map.suggestions
         (key, en_source, suggestion_source, suggestion, author, version, src_hash)
     SELECT t.id, s.en, NULL, t.it,
