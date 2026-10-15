@@ -5,11 +5,14 @@
 //!
 //! gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
 //!              [--translators translators.json]   (see translate.rs)
+//!              [--review-daily 3000]   (texts the background review gives the model per day; 0: off)
 //! gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>   (see replicate.rs)
 //! gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
 //!                                                                         (see consistency.rs)
 //! gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts 300] [--dry-run]
 //!                                                                         (see names.rs)
+//! gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
+//!                                                                         (see review.rs)
 
 use std::{
     collections::HashMap,
@@ -30,6 +33,7 @@ mod consistency;
 mod glossary;
 mod names;
 mod replicate;
+mod review;
 mod sign;
 mod translate;
 
@@ -54,6 +58,11 @@ const RATE: u32 = 30;
 const REGISTER_PER_DAY: u32 = 5;
 const REGISTER_WINDOW: Duration = Duration::from_secs(86_400);
 const THREADS: usize = 4;
+/// Texts the background review gives the model per day, by default.
+const REVIEW_DAILY: usize = 3000;
+/// Between two rounds of the background review; after an error of the model, longer.
+const REVIEW_PAUSE: Duration = Duration::from_secs(20);
+const REVIEW_BACKOFF: Duration = Duration::from_secs(600);
 
 struct App {
     db: Mutex<Connection>,
@@ -84,14 +93,16 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
                     [--translators translators.json]
        gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>
        gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
-       gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts 300] [--dry-run]";
+       gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts 300] [--dry-run]
+       gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let replicate = args.first().is_some_and(|a| a == "replicate");
     let consistency = args.first().is_some_and(|a| a == "consistency");
     let english_names = args.first().is_some_and(|a| a == "names");
-    if replicate || consistency || english_names {
+    let review = args.first().is_some_and(|a| a == "review");
+    if replicate || consistency || english_names || review {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -102,7 +113,7 @@ fn main() {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts"), Some(v)) => {
+            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts" | "--review-daily"), Some(v)) => {
                 options.insert(name.to_owned(), v);
             }
             _ => {
@@ -146,9 +157,22 @@ fn main() {
         run_names(&db, fetch, options.remove("--translators").as_deref(), max_texts, dry_run);
         return;
     }
+    if review {
+        let Some(file) = options.remove("--translators") else {
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        };
+        let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(200);
+        run_review(&db, &file, max_texts, dry_run);
+        return;
+    }
     let listen = options.remove("--listen").unwrap_or_else(|| "127.0.0.1:8790".into());
     let translators_file = options.remove("--translators");
     let engines = translators_file.as_deref().map(translators).unwrap_or_default();
+    let review_daily = options.remove("--review-daily").and_then(|n| n.parse().ok()).unwrap_or(REVIEW_DAILY);
+    // Its own pauses: a model out of quota for the review is not paused for /translate.
+    let mut reviewers = Chain::default();
+    reviewers.set(engines.clone());
     let names: Vec<String> = engines.iter().map(Engine::name).collect();
     let mut translators = Chain::default();
     translators.set(engines);
@@ -178,6 +202,10 @@ fn main() {
             })
         })
         .collect();
+    if review_daily > 0 && !reviewers.is_empty() {
+        let app = app.clone();
+        thread::spawn(move || review_in_background(&app, &reviewers, review_daily));
+    }
     for w in workers {
         let _ = w.join();
     }
@@ -260,6 +288,85 @@ fn run_names(db: &str, fetch: bool, translators_file: Option<&str>, max_texts: u
     }
 }
 
+/// The review (review.rs) by hand: up to `max_texts` texts not reviewed yet, the newest first.
+fn run_review(db: &str, translators_file: &str, max_texts: usize, dry_run: bool) {
+    let mut chain = Chain::default();
+    chain.set(translators(translators_file));
+    let con = open(db).unwrap_or_else(|e| {
+        eprintln!("cannot open {db}: {e}");
+        std::process::exit(1);
+    });
+    let ask = |system: &str, user: &str| chain.ask(system, user).map_err(|e| e.to_string());
+    match review::run(&con, &ask, max_texts, dry_run) {
+        Ok(r) => println!(
+            "review: {} texts, {} right, {} fixed ({} rows), {} fixes refused{}{}",
+            r.asked,
+            r.ok,
+            r.fixed,
+            r.rows,
+            r.refused,
+            if dry_run { " (dry run: nothing changed)" } else { "" },
+            r.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),
+        ),
+        Err(e) => {
+            eprintln!("review: database: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// The review in the server: the texts that arrive, a batch every REVIEW_PAUSE, up to `daily`
+/// a day; the database is not held while the model thinks.
+fn review_in_background(app: &App, chain: &Chain, daily: usize) {
+    let ask = |system: &str, user: &str| chain.ask(system, user).map_err(|e| e.to_string());
+    loop {
+        thread::sleep(REVIEW_PAUSE);
+        let todo = {
+            let db = app.db.lock().unwrap();
+            let left = review::used_today(&db).map(|used| daily.saturating_sub(used));
+            match left.and_then(|left| Ok((review::pending(&db, review::BATCH.min(left))?, english_names(app, &db)?, glossary::all(&db)?))) {
+                Ok(todo) => todo,
+                Err(e) => {
+                    eprintln!("review: database: {e}");
+                    continue;
+                }
+            }
+        };
+        let (texts, names, terms) = todo;
+        if texts.is_empty() {
+            continue;
+        }
+        let verdicts = match review::ask(&ask, &names, &terms, &texts) {
+            Ok(v) => v,
+            Err(why) => {
+                eprintln!("review: {why}; again in {} s", REVIEW_BACKOFF.as_secs());
+                thread::sleep(REVIEW_BACKOFF);
+                continue;
+            }
+        };
+        let db = app.db.lock().unwrap();
+        let written = review::count(&db, texts.len()).and_then(|()| {
+            let mut fixed = 0;
+            for (text, verdict) in texts.iter().zip(&verdicts) {
+                match verdict {
+                    Some(verdict @ review::Verdict::Fixed { it, why }) => {
+                        eprintln!("review: {:?} -> {:?} ({why})", text.it, it);
+                        fixed += review::apply(&db, text, verdict)?;
+                    }
+                    Some(verdict) => {
+                        review::apply(&db, text, verdict)?;
+                    }
+                    None => {}
+                }
+            }
+            Ok(fixed)
+        });
+        if let Err(e) = written {
+            eprintln!("review: database: {e}");
+        }
+    }
+}
+
 /// translators.json: the translators of /translate in order of preference, with their keys
 /// (Engine::from_json in gw2it-translate). Readable by this user only.
 fn translators(file: &str) -> Vec<Engine> {
@@ -299,6 +406,7 @@ fn open(path: &str) -> rusqlite::Result<Connection> {
     con.execute_batch(translate::SCHEMA)?;
     con.execute_batch(consistency::SCHEMA)?;
     con.execute_batch(names::SCHEMA)?;
+    con.execute_batch(review::SCHEMA)?;
     Ok(con)
 }
 
@@ -471,6 +579,7 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
     }
     let mut rows: Vec<Value> = Vec::new();
     let names = english_names(app, &db)?;
+    let terms = if sent.is_empty() { Vec::new() } else { glossary::all(&db)? };
     for (mut row, proof) in sent.iter().filter_map(valid) {
         // Anyone can write contributor.json: only the contributors' hand corrections count as such.
         // The sixth element is the author (the sender), the seventh the trust: see schema.sql.
@@ -492,6 +601,12 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
             && let Some(name) = names.whole(row[2].as_str().unwrap_or(""))
         {
             row[3] = name.into();
+        }
+        // The glossary's fixes (the contributors' terms, the consistency job's), at once; the
+        // language model's review follows in the background (review.rs).
+        if trust <= 1 {
+            let fixed = gw2it_text::glossary::fix(row[2].as_str().unwrap_or(""), row[3].as_str().unwrap_or(""), &terms);
+            row[3] = fixed.into();
         }
         row.as_array_mut().unwrap().extend([Value::Null, trust.into()]);
         rows.push(row);

@@ -207,7 +207,7 @@ struct Row {
 }
 
 /// What `it` must keep of `en`: the names, as written in `en`, and the terms.
-fn keep<'a>(names: &Names, en: &'a str, it: &str) -> Vec<&'a str> {
+pub(crate) fn keep<'a>(names: &Names, en: &'a str, it: &str) -> Vec<&'a str> {
     let mut out = names.missing(en, it);
     out.extend(names::terms_missing(en, it));
     out
@@ -222,7 +222,7 @@ fn whole(names: &Names, en: &str) -> Option<String> {
 
 /// Whether every name of `en` that `it` elides into ("l'Elixir B") starts with a vowel: "l'Toss
 /// Elixir H" is not Italian.
-fn elided_well(names: &Names, en: &str, it: &str) -> bool {
+pub(crate) fn elided_well(names: &Names, en: &str, it: &str) -> bool {
     names.find(en).into_iter().map(|(from, to)| &en[from..to]).all(|name| {
         let vowel = name.chars().next().is_some_and(|c| "AEIOUHaeiouh".contains(c));
         vowel || it.match_indices(name).all(|(at, _)| !it[..at].ends_with(['\'', '’']))
