@@ -249,11 +249,17 @@ impl Names {
 
 /// Words of the game's mechanics that stay in English too, in any case and in sentences, with the
 /// forms they take: Italian players say "boon" and "condi", "benedizione" is no game word.
-pub const TERMS: &[(&str, &[&str])] = &[("boon", &["boon", "boons"]), ("condition", &["condition", "conditions"])];
+/// "Black Lion", the company, too: players say "forziere Black Lion", never "Leone Nero".
+pub const TERMS: &[(&str, &[&str])] =
+    &[("boon", &["boon", "boons"]), ("condition", &["condition", "conditions"]), ("Black Lion", &["black lion"])];
 
-/// Whether `s` has one of `forms` as a word, in any case.
+/// Whether `s` has one of `forms` (one word or more, in a row) as words, in any case.
 fn has_word(s: &str, forms: &[&str]) -> bool {
-    words(s).iter().any(|w| forms.iter().any(|f| w.text.eq_ignore_ascii_case(f)))
+    let found = words(s);
+    forms.iter().any(|f| {
+        let want: Vec<&str> = f.split(' ').collect();
+        found.windows(want.len()).any(|w| w.iter().zip(&want).all(|(w, f)| w.text.eq_ignore_ascii_case(f)))
+    })
 }
 
 /// The terms (`TERMS`) `en` has that `it` lost.
@@ -264,11 +270,14 @@ pub fn terms_missing(en: &str, it: &str) -> Vec<&'static str> {
 /// Whether `it` elides into a term ("l'boon", "dell'condition"): none of them starts with a vowel.
 pub fn term_elided(it: &str) -> bool {
     let lower = it.to_lowercase();
-    TERMS.iter().any(|(term, _)| lower.contains(&format!("'{term}")) || lower.contains(&format!("’{term}")))
+    TERMS.iter().any(|(term, _)| {
+        let term = term.to_lowercase();
+        lower.contains(&format!("'{term}")) || lower.contains(&format!("’{term}"))
+    })
 }
 
 /// Attributes of the terms that stay whole in English: "+100 Condition Damage".
-pub const TERM_ATTRIBUTES: &[&str] = &["Condition Damage", "Condition Duration", "Boon Duration"];
+pub const TERM_ATTRIBUTES: &[&str] = &["Condition Damage", "Condition Duration", "Boon Duration", "Black Lion Trading Company"];
 
 /// The words of the English `en` that a rewrite `new` of the Italian `old` brought in while not
 /// part of `keep` (the names and terms to put back) nor of `TERM_ATTRIBUTES`: "+5 Precisione"
@@ -281,7 +290,9 @@ pub fn english_brought_in<'a>(en: &str, old: &str, new: &'a str, keep: &[&str]) 
         allowed.extend(lower(k));
     }
     for (_, forms) in TERMS {
-        allowed.extend(forms.iter().map(|f| f.to_string()));
+        for f in *forms {
+            allowed.extend(lower(f));
+        }
     }
     words(new)
         .into_iter()
@@ -317,6 +328,10 @@ mod tests {
         // A word that only starts like one is another word.
         assert!(terms_missing("Boonless foes", "Nemici").is_empty());
         assert!(term_elided("Rimuove l'boon"));
+        assert_eq!(terms_missing("Open a Black Lion Chest.", "Apri un forziere del Leone Nero."), ["Black Lion"]);
+        assert!(terms_missing("Open a Black Lion Chest.", "Apri un forziere Black Lion.").is_empty());
+        assert!(terms_missing("A black cat and a lion.", "Un gatto nero e un leone.").is_empty());
+        assert!(term_elided("Statuetta dell'Black Lion"));
         assert!(!term_elided("Rimuove il boon"));
     }
 

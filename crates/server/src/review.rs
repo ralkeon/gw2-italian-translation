@@ -81,7 +81,7 @@ The attributes \"Condition Damage\", \"Condition Duration\" and \"Boon Duration\
 If in a text such a word is not the mechanic (\"your help was a great boon\"), leave it translated and \
 add \"mechanic\": false.
 - \"glossary\": how these English words are translated; use these Italian forms.
-Nothing else goes back to English: boons and conditions written in lowercase in the English (\"inflict bleeding\", \"grant might\") stay translated, and so do other attributes (Precisione, Vitalità), skill types and labels \
+\"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. Nothing else goes back to English: boons and conditions written in lowercase in the English (\"inflict bleeding\", \"grant might\") stay translated, and so do other attributes (Precisione, Vitalità), skill types and labels \
 (\"Incantesimo minore.\") stay in Italian. Keep every %token%, every <tag>, every [tag] and every line \
 break exactly as they are. \"%%\" is the percent sign (\"25%%\"): never write a single \"%\", the game cuts the text there.
 
