@@ -182,8 +182,10 @@ fn run_consistency(db: &str, translators_file: &str, max_groups: usize, dry_run:
     match consistency::run(&con, &ask, &consistency::Options { max_groups, dry_run }) {
         Ok(report) => {
             println!(
-                "consistency: {} groups, {} looked at, {} consistent, {} texts rewritten, {} terms{}{}",
+                "consistency: {} groups, {} words classified ({} names), {} looked at, {} consistent, {} texts rewritten, {} terms{}{}",
                 report.groups,
+                report.classified,
+                report.names,
                 report.checked,
                 report.consistent,
                 report.rewritten,

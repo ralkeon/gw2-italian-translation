@@ -100,6 +100,34 @@ pub fn groups(entries: &[Entry]) -> Vec<Group> {
     found
 }
 
+/// Whether `w` looks like the English `word` (shares its beginning).
+fn like(word: &str, w: &str) -> bool {
+    common_prefix(word, w) >= SHARED_MIN.min(word.chars().count())
+}
+
+/// Whether `term`, the form chosen for the English `word`, is a name (a capital first) with the
+/// word in it or an Italian word that looks like it: "Serafini" for "seraph", not "sfaccettatura"
+/// for "aurene", nor "d'acciaio di Deldrimor".
+pub fn term_fits(word: &str, term: &str) -> bool {
+    term.chars().next().is_some_and(char::is_uppercase) && words(term).iter().any(|w| like(word, w.text))
+}
+
+/// Whether rewriting `old` (the Italian of `en`) as `new` only fixes how it renders the name `word`
+/// as `term`: `old` does not have `term` already (a text with the right form is left as it is),
+/// every word of `new` is in `old`, in `term` or an article or preposition, and no word of `old`
+/// that is in the English too ("Mini", a name left in English) is lost.
+pub fn rewrite_fits(en: &str, word: &str, old: &str, new: &str, term: &str) -> bool {
+    if old.to_lowercase().contains(&term.to_lowercase()) {
+        return false;
+    }
+    let (old_words, new_words, term_words) = (words(old), words(new), words(term));
+    let known: BTreeSet<String> = old_words.iter().chain(&term_words).map(lower).collect();
+    let kept: BTreeSet<String> = new_words.iter().map(lower).collect();
+    let english: BTreeSet<String> = words(en).iter().map(lower).collect();
+    kept.iter().all(|w| known.contains(w) || FUNCTION_WORDS.contains(&w.as_str()))
+        && old_words.iter().map(lower).all(|w| !english.contains(&w) || like(word, &w) || kept.contains(&w))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +142,27 @@ mod tests {
         assert_eq!(rendering("seraph", "Soldato Serafino"), "serafino");
         assert_eq!(rendering("seraph", "Soldato Serafini"), "serafini");
         assert_eq!(rendering("seraph", "Soldato Angelico"), "-");
+    }
+
+    #[test]
+    fn a_term_and_a_rewrite_only_about_the_name() {
+        assert!(term_fits("seraph", "Serafini"));
+        assert!(term_fits("legion", "Legione della Fiamma"));
+        assert!(term_fits("kaineng", "New Kaineng City"));
+        assert!(!term_fits("aurene", "sfaccettatura"));
+        assert!(!term_fits("exalted", "Esaltati"));
+        assert!(!term_fits("deldrimor", "d'acciaio di Deldrimor"));
+        let fits = |en, old, new, term| rewrite_fits(en, &key(en.split(' ').next().unwrap()), old, new, term);
+        assert!(fits("Seraph Soldier", "Soldato Serafino", "Soldato dei Serafini", "Serafini"));
+        assert!(fits("Seraph Soldier", "Soldato Seraph", "Soldato dei Serafini", "Serafini"));
+        assert!(fits("Inquest Hologram", "Ologramma dell'Inquisizione", "Ologramma dell'Inquest", "Inquest"));
+        assert!(fits("Flame Legion Finisher", "Finitore della Legione delle Fiamme", "Finitore della Legione della Fiamma", "Legione della Fiamma"));
+        // Another word of the text changed, or lost: refused.
+        assert!(!fits("Deldrimor Steel Shield Casing", "Bossolo dello scudo di Deldrimor", "Rinforzo dello scudo di Deldrimor", "Deldrimor"));
+        assert!(!fits("Mad King Thorn", "Re Pazzo Thorn", "Il Re Folle Thorn", "Thorn"));
+        assert!(!fits("Aurene Mini Teen Aurene", "Mini Aurene adolescente", "Aurene adolescente", "Aurene"));
+        // The name is already right: the text is left as it is.
+        assert!(!fits("Tyria Threats", "Minacce alla Tyria 1", "Minacce a Tyria 1", "Tyria"));
     }
 
     #[test]

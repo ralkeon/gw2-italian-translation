@@ -5,15 +5,19 @@
 //!
 //! 1. `gw2it_text::consistency::groups` finds the English words that the translations render in
 //!    more than one form.
-//! 2. For each group (the biggest first, a few per run) a language model is asked whether the forms
+//! 2. Only names are settled: a faction, a race, a place, a character, an organisation ("Seraph",
+//!    "Pact"), whose Italian must be one fixed form. A common word ("Black", "Crystal") takes the
+//!    forms grammar asks for (nero, nera, neri), and is left alone. The model tells which words
+//!    are names, fifty at a time with a few texts each; the answer is kept (`consistency_words`).
+//! 3. For each name (the biggest first, a few per run) a language model is asked whether the forms
 //!    are really inconsistent and, if so, which single form and construction to use, and to rewrite
 //!    the texts that differ. Hand corrections (trust 2 and 3) are never changed: they are the
 //!    examples, and what a contributor put in the glossary is the form to follow.
-//! 3. The answer is checked: the markup must be the one of the English, the text must have the
+//! 4. The answer is checked: the markup must be the one of the English, the text must have the
 //!    chosen form and be different from before. Machine translations (trust 1 and below) are
-//!    rewritten, with the old text in `history` and `consistency_log`; the form chosen goes into
-//!    the glossary with trust 1 (below every contributor), and the old forms as wrong ones, so that
-//!    the next translations come out right.
+//!    rewritten, with the old text in `history` and `consistency_log`, and printed; the form chosen
+//!    goes into the glossary with trust 1 (below every contributor), with the old forms the model
+//!    calls mistakes as wrong ones, so that the next translations come out right.
 //!
 //! A group the model found consistent, or that the job has settled, is not asked again until its
 //! forms change (`consistency_state`).
@@ -23,6 +27,8 @@ use gw2it_text::{
     glossary::Term,
     markup,
 };
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -43,26 +49,50 @@ CREATE TABLE IF NOT EXISTS consistency_log (
     old  TEXT    NOT NULL,
     new  TEXT    NOT NULL,
     at   INTEGER NOT NULL
+);
+-- Whether the model called the word a name (a group worth settling), once for every word.
+CREATE TABLE IF NOT EXISTS consistency_words (
+    word    TEXT    PRIMARY KEY,
+    name    INTEGER NOT NULL,
+    checked INTEGER NOT NULL
 );";
 
 /// Texts of a group given to the model: enough to show every form.
 const ITEMS_MAX: usize = 40;
 const TEXT_MAX: usize = 4000;
+/// Words asked about in one request whether they are names, and texts shown with each.
+const CLASSIFY_BATCH: usize = 50;
+const CLASSIFY_EXAMPLES: usize = 3;
 /// The glossary's author for what the job decides.
 const AUTHOR: &str = "consistency";
 
+const CLASSIFY: &str = "You help keep the Italian translation of the game Guild Wars 2 consistent. You get \
+English words, each with a few game texts that contain it, as JSON. Tell which words are NAMES whose \
+Italian translation must be one fixed form everywhere: a faction, group, organisation, place, \
+character or unique thing of the game's world (Seraph, Pact, Vigil, Kryta, Priory). Not names: \
+common nouns, adjectives, verbs and game terms, even when written with a capital letter in item names \
+(Black, Crystal, Lion, Skin, Double, Mini, Glider, Champion, Insight, Torch, Charge), and kinds of \
+creature (Centaur, Griffon, Dragon): their Italian takes the forms grammar and context ask for. When in \
+doubt, it is not a name.
+
+Answer with JSON: {\"names\": [\"<word>\", ...]}, the words exactly as given; an empty list if none.";
+
 const SYSTEM: &str = "You keep the Italian translation of the game Guild Wars 2 consistent. You get an \
-English word and the texts that contain it, each with its Italian translation, as JSON. Decide whether \
-the Italian renders the word in more than one way that a player would see as a mistake: different \
-spellings or number of the same name (Serafino / Serafini), or different constructions for the same kind \
-of thing (\"Soldato Serafino\" / \"Soldato dei Serafini\" / \"Guardia dei Serafini\"). Differences that \
-grammar requires (plural, possessive, gender agreement, a different meaning of the word) are fine.
+English name of the game's world (a faction, race, place, character...) and the texts that contain it, \
+each with its Italian translation, as JSON. Decide whether the Italian renders the name in more than one \
+way that a player would see as a mistake: different spellings or number of the same name (Serafino / \
+Serafini), or different constructions for the same kind of thing (\"Soldato Serafino\" / \"Soldato dei \
+Serafini\" / \"Guardia dei Serafini\"). Differences that grammar requires (plural, possessive, gender \
+agreement, a different meaning of the word) are fine; if the word is not really a name, it is fine.
 
 If it is fine, answer {\"consistent\": true}.
 
 Otherwise choose ONE Italian form for the word and ONE construction, and rewrite the texts that differ.
-- Names of a faction, race or group are used as in \"<noun> dei <Name in the plural>\": \"Guardia dei \
-Serafini\", \"Soldato dei Serafini\".
+- The name stays in English, as in the original game (\"Inquest\", not \"Inquisizione\"; \"Seraph\", not \
+\"Serafini\"), unless \"glossary\" or the hand corrections give an Italian form: then that one. Only the \
+words around it are Italian; do not change a construction that is already fine.
+- Names of a faction or group are used as in \"<noun> dei <Name>\": \"Guardia dei Seraph\", \"Soldato \
+dell'Inquest\".
 - Texts with \"editable\": false are hand corrections by the translators: never change them, and follow \
 their form. If \"glossary\" is given, it is the form the translators chose: use it.
 - Rewrite only texts with \"editable\": true, and only what is needed. Keep every %token%, every \
@@ -70,11 +100,16 @@ their form. If \"glossary\" is given, it is the form the translators chose: use 
 - Natural Italian, as in a video game.
 
 Answer with JSON: {\"consistent\": false, \"term\": \"<the Italian form of the word, as it appears in the \
-texts, e.g. Serafini>\", \"rewrites\": [{\"n\": <the text's n>, \"it\": \"<the new Italian text>\"}]}";
+texts, e.g. Serafini>\", \"wrong\": [\"<each other form of the word in the texts that is a mistake, \
+e.g. Serafino; never a form grammar asks for>\"], \"rewrites\": [{\"n\": <the text's n>, \"it\": \"<the \
+new Italian text>\"}]}";
 
 #[derive(Default, Debug)]
 pub struct Report {
     pub groups: usize,
+    /// Words the model was asked about, and how many of them are names.
+    pub classified: usize,
+    pub names: usize,
     pub checked: usize,
     pub consistent: usize,
     pub rewritten: usize,
@@ -128,20 +163,39 @@ pub fn run(
     let entries = load(con)?;
     let found = consistency::groups(&entries);
     report.groups = found.len();
+    // Not settled yet, or changed since.
+    let mut open = Vec::new();
     for group in found {
+        let known: Option<String> =
+            con.query_row("SELECT signature FROM consistency_state WHERE word = ?1", [&group.word], |r| r.get(0)).optional()?;
+        if known.as_deref() != Some(group.signature().as_str()) {
+            open.push(group);
+        }
+    }
+    let mut names: HashMap<String, bool> = {
+        let mut stmt = con.prepare("SELECT word, name FROM consistency_words")?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    for i in 0..open.len() {
         if report.checked >= options.max_groups {
             break;
         }
-        let known: Option<String> =
-            con.query_row("SELECT signature FROM consistency_state WHERE word = ?1", [&group.word], |r| r.get(0)).optional()?;
-        if known.as_deref() == Some(group.signature().as_str()) {
+        if !names.contains_key(&open[i].word) {
+            let batch: Vec<&Group> = open[i..].iter().filter(|g| !names.contains_key(&g.word)).take(CLASSIFY_BATCH).collect();
+            if let Err(why) = classify(con, &entries, &batch, ask, options, &mut names, &mut report)? {
+                report.stopped = Some(why);
+                break;
+            }
+        }
+        let group = &open[i];
+        if names.get(&group.word) != Some(&true) {
             continue;
         }
         report.checked += 1;
-        match settle(con, &entries, &group, ask, options)? {
+        match settle(con, &entries, group, ask, options)? {
             Outcome::Consistent => {
                 report.consistent += 1;
-                remember(con, &group, options)?;
+                remember(con, group, options)?;
             }
             Outcome::Rewrote { texts, term } => {
                 report.rewritten += texts;
@@ -155,6 +209,57 @@ pub fn run(
         }
     }
     Ok(report)
+}
+
+/// Asks the model which words of `batch` are names, and keeps the answer in `names` (and in
+/// `consistency_words`, except in a dry run). Err: the run must stop. Words of an answer that is
+/// no good are skipped in this run.
+fn classify(
+    con: &Connection,
+    entries: &[Entry],
+    batch: &[&Group],
+    ask: &dyn Fn(&str, &str) -> Result<Value, Failure>,
+    options: &Options,
+    names: &mut HashMap<String, bool>,
+    report: &mut Report,
+) -> rusqlite::Result<Result<(), String>> {
+    let words: Vec<Value> = batch
+        .iter()
+        .map(|g| {
+            let examples: Vec<&str> = g.entries.iter().take(CLASSIFY_EXAMPLES).map(|&i| entries[i].en.as_str()).collect();
+            json!({ "word": g.word, "texts": examples })
+        })
+        .collect();
+    let answer = match ask(CLASSIFY, &json!({ "words": words }).to_string()) {
+        Ok(answer) => answer,
+        Err(Failure::Stop(why)) => return Ok(Err(why)),
+        Err(Failure::Unusable(why)) => {
+            eprintln!("consistency: which words are names: {why}");
+            for g in batch {
+                names.insert(g.word.clone(), false);
+            }
+            return Ok(Ok(()));
+        }
+    };
+    let said: Vec<String> =
+        answer["names"].as_array().map(Vec::as_slice).unwrap_or_default().iter().filter_map(|w| w.as_str()).map(str::to_lowercase).collect();
+    let now = now_ms();
+    for g in batch {
+        let name = said.contains(&g.word);
+        names.insert(g.word.clone(), name);
+        report.classified += 1;
+        report.names += usize::from(name);
+        if name {
+            eprintln!("consistency: {} is a name", g.word);
+        }
+        if !options.dry_run {
+            con.execute(
+                "INSERT OR REPLACE INTO consistency_words (word, name, checked) VALUES (?1, ?2, ?3)",
+                params![g.word, name, now],
+            )?;
+        }
+    }
+    Ok(Ok(()))
 }
 
 /// Why the model could not be asked.
@@ -212,7 +317,7 @@ fn settle(
         return Ok(Outcome::Unusable("no term in the answer".into()));
     };
     let candidate = Term { en: group.word.clone(), it: term.clone(), wrong: Vec::new() };
-    if !candidate.is_valid() {
+    if !candidate.is_valid() || !consistency::term_fits(&group.word, &term) {
         return Ok(Outcome::Unusable(format!("term {term:?} is not valid")));
     }
 
@@ -230,8 +335,10 @@ fn settle(
             && !new.trim().is_empty()
             && new.chars().count() <= TEXT_MAX
             && markup::token_mismatch(&entry.en, new).is_empty()
-            && new.to_lowercase().contains(&term.to_lowercase());
+            && new.to_lowercase().contains(&term.to_lowercase())
+            && consistency::rewrite_fits(&entry.en, &group.word, &entry.it, new, &term);
         if usable {
+            eprintln!("consistency: {}: {} {:?} -> {:?}", group.word, entry.id, entry.it, new);
             done.push((i, new.to_owned()));
         } else {
             eprintln!("consistency: {}: rewrite of text {} refused", group.word, entry.id);
@@ -241,14 +348,18 @@ fn settle(
         return Ok(Outcome::Unusable("nothing to rewrite".into()));
     }
 
-    // The old forms: the last word of each way the texts rendered it, other than the new one.
-    let wrong: Vec<String> = group
-        .variants
+    // The old forms the model calls mistakes, if the texts have them: never one grammar asks for.
+    let found: Vec<&str> = group.variants.iter().filter_map(|v| v.rsplit(' ').next()).collect();
+    let wrong: Vec<String> = answer["wrong"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
         .iter()
-        .filter_map(|v| v.rsplit(' ').next())
-        .filter(|v| *v != "-" && !v.eq_ignore_ascii_case(&term))
-        .map(str::to_owned)
+        .filter_map(|w| w.as_str())
+        .map(str::to_lowercase)
+        .filter(|w| found.contains(&w.as_str()) && !w.eq_ignore_ascii_case(&term))
         .collect();
+    eprintln!("consistency: {}: term {term:?}, wrong {wrong:?}", group.word);
     let mut set = false;
     if !options.dry_run {
         let now = now_ms();
@@ -304,29 +415,29 @@ mod tests {
         con.query_row("SELECT it FROM translations WHERE id = ?1", [id], |r| r.get(0)).unwrap()
     }
 
-    /// A model that always gives `answer`.
+    /// A model that calls "seraph" a name and always gives `answer` about it.
     fn model(answer: Value) -> impl Fn(&str, &str) -> Result<Value, Failure> {
-        move |_: &str, _: &str| Ok(answer.clone())
+        move |system: &str, _: &str| Ok(if system == CLASSIFY { json!({"names": ["Seraph"]}) } else { answer.clone() })
     }
 
     #[test]
     fn rewrites_machine_translations_and_teaches_the_glossary() {
         let con = db();
         let ask = model(json!({
-            "consistent": false, "term": "Serafini",
+            "consistent": false, "term": "Serafini", "wrong": ["Serafino", "Serafica"],
             "rewrites": [
                 {"n": 1, "it": "Soldato dei Serafini"},      // machine: rewritten
                 {"n": 2, "it": "Serafini"},                    // markup lost: refused
                 {"n": 3, "it": "Mago dei Serafini"},           // a hand correction: never
                 {"n": 0, "it": "Guardia dei Serafini ok"},     // a hand correction: never
-                {"n": 4, "it": "Arciere dei Serafini"},        // machine: rewritten
+                {"n": 4, "it": "Arciere dei Serafini"},        // has the name right already: left
                 {"n": 9, "it": "Nowhere dei Serafini"},        // not a text of the group
             ]
         }));
         let report = run(&con, &ask, &Options { max_groups: 5, dry_run: false }).unwrap();
-        assert_eq!((report.checked, report.rewritten, report.terms), (1, 2, 1), "{report:?}");
+        assert_eq!((report.checked, report.rewritten, report.terms), (1, 1, 1), "{report:?}");
         assert_eq!(it(&con, 2), "Soldato dei Serafini");
-        assert_eq!(it(&con, 5), "Arciere dei Serafini");
+        assert_eq!(it(&con, 5), "Arciere Serafini");
         // Hand corrections, and the text whose markup would be lost, are as they were.
         assert_eq!((it(&con, 1), it(&con, 3), it(&con, 4)), ("Guardia dei Serafini".into(), "Serafino %str1%".into(), "Mago Serafino".into()));
 
@@ -334,7 +445,7 @@ mod tests {
         let old: String = con.query_row("SELECT it FROM history WHERE id = 2", [], |r| r.get(0)).unwrap();
         assert_eq!(old, "Soldato Serafino");
         let logged: i64 = con.query_row("SELECT count(*) FROM consistency_log", [], |r| r.get(0)).unwrap();
-        assert_eq!(logged, 2);
+        assert_eq!(logged, 1);
         let (author, trust, seq): (String, i64, i64) =
             con.query_row("SELECT author, trust, seq FROM translations WHERE id = 2", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
         assert_eq!((author.as_str(), trust), ("consistency", 1));
@@ -351,14 +462,15 @@ mod tests {
     fn a_consistent_group_is_not_asked_again() {
         let con = db();
         let calls = RefCell::new(0);
-        let ask = |_: &str, _: &str| {
+        let ask = |system: &str, _: &str| {
             *calls.borrow_mut() += 1;
-            Ok(json!({"consistent": true}))
+            Ok(if system == CLASSIFY { json!({"names": ["seraph"]}) } else { json!({"consistent": true}) })
         };
         let options = Options { max_groups: 5, dry_run: false };
         assert_eq!(run(&con, &ask, &options).unwrap().consistent, 1);
         assert_eq!(run(&con, &ask, &options).unwrap().checked, 0);
-        assert_eq!(*calls.borrow(), 1);
+        // Once whether it is a name, once about its forms.
+        assert_eq!(*calls.borrow(), 2);
         // The texts change: its forms change, and it is looked at again.
         con.execute("UPDATE translations SET it = 'Arciere Serafica' WHERE id = 5", []).unwrap();
         assert_eq!(run(&con, &ask, &options).unwrap().checked, 1);
@@ -380,6 +492,23 @@ mod tests {
         assert_eq!(state, 0);
         run(&con, &ask, &Options { max_groups: 5, dry_run: false }).unwrap();
         assert_eq!(it(&con, 5), "Arciere dei Serafim");
+        assert_eq!(it(&con, 2), "Soldato Serafino");
+    }
+
+    #[test]
+    fn a_word_that_is_no_name_is_left_alone_and_not_asked_about_again() {
+        let con = db();
+        let calls = RefCell::new(Vec::new());
+        let ask = |system: &str, user: &str| {
+            calls.borrow_mut().push(system == CLASSIFY);
+            assert!(system != CLASSIFY || user.contains("Seraph Guard"), "examples go with the word: {user}");
+            Ok(if system == CLASSIFY { json!({"names": []}) } else { json!({"consistent": false, "term": "Serafini"}) })
+        };
+        let options = Options { max_groups: 5, dry_run: false };
+        let report = run(&con, &ask, &options).unwrap();
+        assert_eq!((report.classified, report.names, report.checked), (1, 0, 0));
+        run(&con, &ask, &options).unwrap();
+        assert_eq!(*calls.borrow(), [true]);
         assert_eq!(it(&con, 2), "Soldato Serafino");
     }
 
