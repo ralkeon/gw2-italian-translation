@@ -11,6 +11,7 @@
 //!                                                                         (see consistency.rs)
 //! gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts 300] [--dry-run]
 //!                                                                         (see names.rs)
+//! gw2it-server repair [--db gw2it.db] [--dry-run]   (the `%` a translator added, in every row)
 //! gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
 //!                                                                         (see review.rs)
 
@@ -94,7 +95,8 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>
        gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
        gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts 300] [--dry-run]
-       gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]";
+       gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
+       gw2it-server repair [--db gw2it.db] [--dry-run]";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -102,7 +104,8 @@ fn main() {
     let consistency = args.first().is_some_and(|a| a == "consistency");
     let english_names = args.first().is_some_and(|a| a == "names");
     let review = args.first().is_some_and(|a| a == "review");
-    if replicate || consistency || english_names || review {
+    let repair = args.first().is_some_and(|a| a == "repair");
+    if replicate || consistency || english_names || review || repair {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -155,6 +158,20 @@ fn main() {
     if english_names {
         let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(300);
         run_names(&db, fetch, options.remove("--translators").as_deref(), max_texts, dry_run);
+        return;
+    }
+    if repair {
+        let con = open(&db).unwrap_or_else(|e| {
+            eprintln!("cannot open {db}: {e}");
+            std::process::exit(1);
+        });
+        match run_repair(&con, dry_run) {
+            Ok(n) => println!("repair: {n} rows{}", if dry_run { " (dry run: nothing changed)" } else { "" }),
+            Err(e) => {
+                eprintln!("repair: database: {e}");
+                std::process::exit(1);
+            }
+        }
         return;
     }
     if review {
@@ -286,6 +303,42 @@ fn run_names(db: &str, fetch: bool, translators_file: Option<&str>, max_texts: u
             std::process::exit(1);
         }
     }
+}
+
+/// The `%` signs a translator added or moved (markup::fix_percent), in every row, hand corrections
+/// too: the game cuts the text there. Returns the rows repaired.
+fn run_repair(con: &Connection, dry_run: bool) -> rusqlite::Result<usize> {
+    let rows: Vec<(i64, String, String, String)> = {
+        let mut stmt = con.prepare("SELECT id, hash, en, it FROM translations WHERE instr(it, '%') > 0")?;
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    let now = now_ms();
+    let mut repaired = 0;
+    for (id, hash, en, it) in rows {
+        let new = gw2it_text::markup::fix_percent(&en, &it);
+        if new == it {
+            if gw2it_text::markup::stray_percent(&it) {
+                eprintln!("repair: {id} {it:?}: cannot be repaired");
+            }
+            continue;
+        }
+        println!("repair: {id} {it:?} -> {new:?}");
+        repaired += 1;
+        if dry_run {
+            continue;
+        }
+        con.execute(
+            "INSERT INTO history (id, hash, it, status, author, at, replaced_by, replaced_at)
+             SELECT id, hash, it, status, author, at, 'repair', ?3 FROM translations WHERE id = ?1 AND hash = ?2",
+            params![id, hash, now],
+        )?;
+        con.execute(
+            "UPDATE translations SET it = ?3, at = ?4, seq = (SELECT coalesce(max(seq), 0) FROM translations) + 1
+             WHERE id = ?1 AND hash = ?2 AND it = ?5",
+            params![id, hash, new, now, it],
+        )?;
+    }
+    Ok(repaired)
 }
 
 /// The review (review.rs) by hand: up to `max_texts` texts not reviewed yet, the newest first.
@@ -602,6 +655,9 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
         {
             row[3] = name.into();
         }
+        // A `%` a translator added cuts the text in the game: repaired in every row.
+        let repaired = gw2it_text::markup::fix_percent(row[2].as_str().unwrap_or(""), row[3].as_str().unwrap_or(""));
+        row[3] = repaired.into();
         // The glossary's fixes (the contributors' terms, the consistency job's), at once; the
         // language model's review follows in the background (review.rs).
         if trust <= 1 {

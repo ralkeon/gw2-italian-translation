@@ -176,9 +176,102 @@ fn parse_placeholder(tag: &str) -> Option<usize> {
     tag.strip_prefix("<x id=\"")?.strip_suffix("\"/>")?.parse().ok()
 }
 
+/// Whether `it` has a `%` outside the tokens (`%%`, `%str1%`). The game reads it as the start of
+/// a format (`% d` is `%d`) and cuts the text there: "66%% % di probabilità" showed "66%".
+pub fn stray_percent(it: &str) -> bool {
+    let mut rest = it;
+    while let Some(c) = rest.chars().next() {
+        match token_len(rest) {
+            Some(len) => rest = &rest[len..],
+            None if c == '%' => return true,
+            None => rest = &rest[c.len_utf8()..],
+        }
+    }
+    false
+}
+
+/// `it` with the percent signs a translator added or moved put back after the numbers they follow
+/// in `en`: "25%% % di" and "del%% 75%" (DeepL sees a percentage and adds its own sign). `it` as
+/// it is if it has no stray `%`, or if the numbers cannot be found.
+pub fn fix_percent(en: &str, it: &str) -> String {
+    if !stray_percent(it) {
+        return it.to_owned();
+    }
+    // The numbers `%%` follows in the English, in order; a `%%` after anything else: give up.
+    let mut numbers = Vec::new();
+    let mut rest = en;
+    let mut at = 0;
+    while let Some(c) = rest.chars().next() {
+        let len = token_len(rest).unwrap_or(c.len_utf8());
+        if &rest[..len] == "%%" {
+            let number: String = en[..at].chars().rev().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == ',').collect();
+            let number: String = number.chars().rev().collect::<String>().trim_start_matches(['.', ',']).to_owned();
+            if number.is_empty() {
+                return it.to_owned();
+            }
+            numbers.push(number);
+        }
+        rest = &rest[len..];
+        at += len;
+    }
+    // Without any percent sign, then the signs back after the numbers.
+    let mut bare = String::with_capacity(it.len());
+    let mut rest = it;
+    while let Some(c) = rest.chars().next() {
+        match token_len(rest) {
+            Some(2) if rest.starts_with("%%") => rest = &rest[2..],
+            Some(len) => {
+                bare.push_str(&rest[..len]);
+                rest = &rest[len..];
+            }
+            None if c == '%' => rest = &rest[1..],
+            None => {
+                bare.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+    }
+    while bare.contains("  ") {
+        bare = bare.replace("  ", " ");
+    }
+    let mut out = String::with_capacity(bare.len() + 2 * numbers.len());
+    let mut from = 0;
+    for number in &numbers {
+        let found = bare[from..].match_indices(number.as_str()).map(|(i, _)| from + i).find(|&i| {
+            let end = i + number.len();
+            !bare[..i].ends_with(|c: char| c.is_ascii_digit()) && !bare[end..].starts_with(|c: char| c.is_ascii_digit())
+        });
+        let Some(i) = found else { return it.to_owned() };
+        let end = i + number.len();
+        out.push_str(&bare[from..end]);
+        out.push_str("%%");
+        from = end;
+    }
+    out.push_str(&bare[from..]);
+    if token_mismatch(en, &out).is_empty() && !stray_percent(&out) { out } else { it.to_owned() }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stray_percent_signs() {
+        assert!(stray_percent("66%% % di probabilità"));
+        assert!(!stray_percent("66%% di probabilità, %str1%"));
+        assert_eq!(fix_percent("66%% Chance to Steal Life", "66%% % di probabilità di rubare vita"), "66%% di probabilità di rubare vita");
+        assert_eq!(
+            fix_percent("Gain a 75%% chance to steal life", "Ottieni una probabilità del%% 75% di rubare vita"),
+            "Ottieni una probabilità del 75%% di rubare vita"
+        );
+        assert_eq!(
+            fix_percent("Reduced by 50%%. 50%% of hits", "Ridotta di 50%%. Il 50%% % dei colpi"),
+            "Ridotta di 50%%. Il 50%% dei colpi"
+        );
+        // Nothing stray, or a number that is not there: as it is.
+        assert_eq!(fix_percent("10%% more", "10%% in più"), "10%% in più");
+        assert_eq!(fix_percent("10%% more", "dieci % in più"), "dieci % in più");
+    }
 
     fn round_trip(en: &str, fake_translation: impl Fn(&str) -> String) -> Option<String> {
         let p = prepare(en)?;

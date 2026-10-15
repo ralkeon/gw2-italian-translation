@@ -211,7 +211,7 @@ impl Worker {
                     match q.prepared.restore(xml) {
                         Some(it) => {
                             // Before the plural marks: they are made from the corrected text.
-                            let it = glossary::fix(en, &markup::fix_spacing(en, &it), &terms);
+                            let it = glossary::fix(en, &markup::fix_percent(en, &markup::fix_spacing(en, &it)), &terms);
                             let it = plural::pluralize(en, &it);
                             pipe::send_text(*id, *hash, &it);
                             let proof = translated.signatures.get(i).map(|s| (s.clone(), xml.clone()));

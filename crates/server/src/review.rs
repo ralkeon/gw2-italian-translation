@@ -83,7 +83,7 @@ add \"mechanic\": false.
 - \"glossary\": how these English words are translated; use these Italian forms.
 Nothing else goes back to English: boons and conditions written in lowercase in the English (\"inflict bleeding\", \"grant might\") stay translated, and so do other attributes (Precisione, Vitalità), skill types and labels \
 (\"Incantesimo minore.\") stay in Italian. Keep every %token%, every <tag>, every [tag] and every line \
-break exactly as they are.
+break exactly as they are. \"%%\" is the percent sign (\"25%%\"): never write a single \"%\", the game cuts the text there.
 
 Answer with JSON: {\"texts\": [{\"n\": <the text's n>, \"ok\": true} for a text that is right, or \
 {\"n\": <n>, \"it\": \"<the fixed Italian>\", \"why\": \"<the mistake, in a few Italian words>\", \"kind\": \"<meaning, missing, grammar, markup, names or style>\"}]}. Making a text like the other texts (consistency, uniformity, a standard form) is \"style\".";
@@ -154,7 +154,7 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool) 
     if !names::english_brought_in(en, old, new, &keep(names, en, old)).is_empty() {
         return Some("English brought back");
     }
-    if !markup::token_mismatch(en, new).is_empty() || old.contains("[pl:") != new.contains("[pl:") {
+    if !markup::token_mismatch(en, new).is_empty() || markup::stray_percent(new) || old.contains("[pl:") != new.contains("[pl:") {
         return Some("markup changed");
     }
     if glossary::fix(en, new, terms) != new {
