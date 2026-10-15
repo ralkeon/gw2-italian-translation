@@ -5,6 +5,7 @@
 pub mod consistency;
 pub mod glossary;
 pub mod markup;
+pub mod names;
 pub mod plural;
 
 /// The text the game shows for `en`, from the translator's XML answer `xml` (None if it lost,

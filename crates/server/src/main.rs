@@ -8,6 +8,8 @@
 //! gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>   (see replicate.rs)
 //! gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
 //!                                                                         (see consistency.rs)
+//! gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts 300] [--dry-run]
+//!                                                                         (see names.rs)
 
 use std::{
     collections::HashMap,
@@ -25,6 +27,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 
 mod consistency;
 mod glossary;
+mod names;
 mod replicate;
 mod sign;
 mod translate;
@@ -73,23 +76,26 @@ impl From<rusqlite::Error> for HttpError {
 const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
                     [--translators translators.json]
        gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>
-       gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]";
+       gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
+       gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts 300] [--dry-run]";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let replicate = args.first().is_some_and(|a| a == "replicate");
     let consistency = args.first().is_some_and(|a| a == "consistency");
-    if replicate || consistency {
+    let english_names = args.first().is_some_and(|a| a == "names");
+    if replicate || consistency || english_names {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
     let include_manual = args.iter().any(|a| a == "--include-manual");
-    args.retain(|a| a != "--dry-run" && a != "--include-manual");
+    let fetch = args.iter().any(|a| a == "--fetch");
+    args.retain(|a| a != "--dry-run" && a != "--include-manual" && a != "--fetch");
     let mut options = HashMap::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups"), Some(v)) => {
+            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts"), Some(v)) => {
                 options.insert(name.to_owned(), v);
             }
             _ => {
@@ -126,6 +132,11 @@ fn main() {
         };
         let max_groups = options.remove("--max-groups").and_then(|n| n.parse().ok()).unwrap_or(15);
         run_consistency(&db, &file, max_groups, dry_run, include_manual);
+        return;
+    }
+    if english_names {
+        let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(300);
+        run_names(&db, fetch, options.remove("--translators").as_deref(), max_texts, dry_run);
         return;
     }
     let listen = options.remove("--listen").unwrap_or_else(|| "127.0.0.1:8790".into());
@@ -202,6 +213,45 @@ fn run_consistency(db: &str, translators_file: &str, max_groups: usize, dry_run:
     }
 }
 
+/// The names that stay in English (names.rs): the official API's list with `fetch`, then the
+/// machine translations that lost one, fixed (by the language models of translators.json, if
+/// given; without, only the texts that are the name).
+fn run_names(db: &str, fetch: bool, translators_file: Option<&str>, max_texts: usize, dry_run: bool) {
+    let con = open(db).unwrap_or_else(|e| {
+        eprintln!("cannot open {db}: {e}");
+        std::process::exit(1);
+    });
+    if fetch {
+        match names::fetch(&con) {
+            Ok(added) => println!("names: {added} new from the API"),
+            Err(e) => {
+                eprintln!("names: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    let mut chain = Chain::default();
+    chain.set(translators_file.map(translators).unwrap_or_default());
+    let ask = |system: &str, user: &str| chain.ask(system, user).map_err(|e| e.to_string());
+    let ask: Option<&names::Ask> = if chain.is_empty() { None } else { Some(&ask) };
+    match names::run(&con, ask, &names::Options { dry_run, max_texts }) {
+        Ok(r) => println!(
+            "names: {} texts that are a name, {} with one inside, {} rewritten, {} failed, {} hand corrections without their name{}{}",
+            r.whole,
+            r.inside,
+            r.rewritten,
+            r.failed,
+            r.manual,
+            if dry_run { " (dry run: nothing changed)" } else { "" },
+            r.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),
+        ),
+        Err(e) => {
+            eprintln!("names: database: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// translators.json: the translators of /translate in order of preference, with their keys
 /// (Engine::from_json in gw2it-translate). Readable by this user only.
 fn translators(file: &str) -> Vec<Engine> {
@@ -240,6 +290,7 @@ fn open(path: &str) -> rusqlite::Result<Connection> {
     }
     con.execute_batch(translate::SCHEMA)?;
     con.execute_batch(consistency::SCHEMA)?;
+    con.execute_batch(names::SCHEMA)?;
     Ok(con)
 }
 
