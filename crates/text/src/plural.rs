@@ -60,8 +60,11 @@ const APPOSITION: &[&str] = &[
 /// `it` (the singular translation of `en`) with the plural marks the game needs. Unchanged if `en`
 /// has no plural mark, has a `%num%`, or `it` already has marks.
 pub fn pluralize(en: &str, it: &str) -> String {
-    if !(en.contains("[s]") || en.contains("[pl:")) || en.contains("%num") || it.contains("[pl:") {
+    if !(en.contains("[s]") || en.contains("[pl:")) || en.contains("%num") {
         return it.to_owned();
+    }
+    if it.contains("[pl:") {
+        return fix_trailing(en, it);
     }
     let english: Vec<String> = words_of(en).map(str::to_lowercase).collect();
 
@@ -116,7 +119,68 @@ pub fn pluralize(en: &str, it: &str) -> String {
             break;
         }
     }
-    if changed { out.concat() } else { it.to_owned() }
+    if changed { fix_trailing(en, &out.concat()) } else { it.to_owned() }
+}
+
+/// Quality and tier adjectives of item names (English at the start of the name) and the Italian
+/// forms they take: "Superior Sigil of Ice" is "Sigillo di ghiaccio superiore", the adjective
+/// after the noun's phrase, where `pluralize` has stopped at the preposition.
+const TRAILING_ADJECTIVES: &[(&str, &[&str])] = &[
+    ("superior", &["superiore"]),
+    ("major", &["maggiore"]),
+    ("greater", &["maggiore"]),
+    ("minor", &["minore"]),
+    ("lesser", &["minore"]),
+    ("hearty", &["robusto", "robusta"]),
+    ("sturdy", &["robusto", "robusta"]),
+    ("simple", &["semplice"]),
+    ("plain", &["semplice"]),
+    ("strong", &["forte"]),
+    ("large", &["grande"]),
+    ("small", &["piccolo", "piccola"]),
+    ("rare", &["raro", "rara"]),
+    ("fine", &["raffinato", "raffinata", "pregiato", "pregiata"]),
+];
+
+/// `it`, whose noun is already marked, with the plural mark on the adjective that ends its name
+/// (`Sigillo[pl:"Sigilli"] di ghiaccio superiore` -> `... superiore[pl:"superiori"]`), when the
+/// English starts with that adjective. Unchanged otherwise, or if the adjective is marked.
+pub fn fix_trailing(en: &str, it: &str) -> String {
+    let first = en.split(|c: char| !c.is_alphabetic()).next().unwrap_or("").to_lowercase();
+    let Some((_, forms)) = TRAILING_ADJECTIVES.iter().find(|(adj, _)| *adj == first) else {
+        return it.to_owned();
+    };
+    if !it.contains("[pl:") || it.contains('<') {
+        return it.to_owned();
+    }
+    // The name ends at the first `(`, `,` or `:` that is not inside a mark.
+    let mut end = it.len();
+    let mut rest = it;
+    let mut at = 0;
+    while let Some(c) = rest.chars().next() {
+        if rest.starts_with("[pl:") {
+            let Some(close) = rest.find(']') else { return it.to_owned() };
+            rest = &rest[close + 1..];
+            at += close + 1;
+            continue;
+        }
+        if "(,:".contains(c) {
+            end = at;
+            break;
+        }
+        rest = &rest[c.len_utf8()..];
+        at += c.len_utf8();
+    }
+    let name = it[..end].trim_end();
+    let word_start = name.rfind(|c: char| !c.is_alphabetic()).map_or(0, |i| i + name[i..].chars().next().map_or(1, char::len_utf8));
+    let word = &name[word_start..];
+    if word_start == 0 || !it[..word_start].ends_with(' ') || !forms.contains(&word.to_lowercase().as_str()) {
+        return it.to_owned();
+    }
+    match plural_word(word, false) {
+        Some(pl) if pl != word => format!("{}{}[pl:\"{pl}\"]{}", &it[..word_start], word, &it[name.len()..]),
+        _ => it.to_owned(),
+    }
 }
 
 fn mark(lead: &str, core: &str, plural: &str, trail: &str) -> String {
@@ -288,6 +352,34 @@ mod tests {
     fn markup_is_kept() {
         assert_eq!(pluralize("<c=@flavor>Truffle[s]</c>", "<c=@flavor>Tartufo</c>"), "<c=@flavor>Tartufo[pl:\"Tartufi\"]</c>");
         assert!(crate::markup::token_mismatch("Truffle[s]", &pluralize("Truffle[s]", "Tartufo")).is_empty());
+    }
+
+    #[test]
+    fn adjective_after_the_phrase() {
+        assert_eq!(
+            pluralize("Superior Sigil[s] of Ice", "Sigillo di ghiaccio superiore"),
+            "Sigillo[pl:\"Sigilli\"] di ghiaccio superiore[pl:\"superiori\"]"
+        );
+        // Already marked by an older version: only the adjective is added.
+        assert_eq!(
+            pluralize("Superior Sigil[s] of Ice", "Sigillo[pl:\"Sigilli\"] di ghiaccio superiore"),
+            "Sigillo[pl:\"Sigilli\"] di ghiaccio superiore[pl:\"superiori\"]"
+        );
+        assert_eq!(
+            pluralize("Hearty Cotton Insignia[s]", "Insegna in cotone robusta"),
+            "Insegna[pl:\"Insegne\"] in cotone robusta[pl:\"robuste\"]"
+        );
+        // Adjective next to the noun, a name, an apposition, a text with no tier word, and a second run: as they are.
+        let done = "Runa[pl:\"Rune\"] superiore[pl:\"superiori\"] di Dwayna";
+        assert_eq!(pluralize("Superior Rune[s] of Dwayna", done), done);
+        assert_eq!(
+            pluralize("Major Sigil[s] of Fire", "Sigillo di Fuoco"),
+            "Sigillo[pl:\"Sigilli\"] di Fuoco"
+        );
+        assert_eq!(pluralize("Basic Salvage Kit[s]", "Kit di recupero base"), "Kit di recupero base");
+        let done = "Sigillo[pl:\"Sigilli\"] di ghiaccio superiore[pl:\"superiori\"]";
+        assert_eq!(fix_trailing("Superior Sigil[s] of Ice", done), done);
+        assert_eq!(fix_trailing("Sigil[s] of Ice", "Sigillo[pl:\"Sigilli\"] di ghiaccio superiore"), "Sigillo[pl:\"Sigilli\"] di ghiaccio superiore");
     }
 
     #[test]

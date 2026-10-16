@@ -307,16 +307,18 @@ fn run_names(db: &str, fetch: bool, translators_file: Option<&str>, max_texts: u
 
 /// The `%` signs a translator added or moved and the wrapper (`%str1%%str2%`... `<c=...>`) it moved
 /// into the sentence (markup::repair), in every row, hand corrections too: the game cuts the text
-/// or shows it broken. Returns the rows repaired.
+/// or shows it broken, and the plural mark of the adjective that ends a name (plural::fix_trailing).
+/// Returns the rows repaired.
 fn run_repair(con: &Connection, dry_run: bool) -> rusqlite::Result<usize> {
     let rows: Vec<(i64, String, String, String)> = {
-        let mut stmt = con.prepare("SELECT id, hash, en, it FROM translations WHERE instr(it, '%') > 0 OR instr(it, '</c>') > 0")?;
+        let mut stmt = con.prepare("SELECT id, hash, en, it FROM translations WHERE instr(it, '%') > 0 OR instr(it, '</c>') > 0 OR instr(it, '[pl:') > 0")?;
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?
     };
     let now = now_ms();
     let mut repaired = 0;
     for (id, hash, en, it) in rows {
-        let new = gw2it_text::markup::repair(&en, &it);
+        // Plural: only the adjective that ends the name of a text already marked (hand corrections too).
+        let new = gw2it_text::plural::fix_trailing(&en, &gw2it_text::markup::repair(&en, &it));
         if new == it {
             if gw2it_text::markup::stray_percent(&it) || gw2it_text::markup::wrap_broken(&en, &it) {
                 eprintln!("repair: {id} {it:?}: cannot be repaired");
