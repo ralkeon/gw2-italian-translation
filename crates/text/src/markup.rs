@@ -134,8 +134,14 @@ pub fn wrap_broken(en: &str, it: &str) -> bool {
             return true;
         }
     }
+    // Colour spans: judged only where the English itself is balanced.
+    c_balanced(en) && !c_balanced(it)
+}
+
+/// Every `</c>` comes after the `<c=...>` it closes, and none is left open.
+fn c_balanced(text: &str) -> bool {
     let mut depth = 0i32;
-    let mut rest = it;
+    let mut rest = text;
     while let Some(c) = rest.chars().next() {
         let len = token_len(rest).unwrap_or(c.len_utf8());
         match &rest[..len] {
@@ -144,12 +150,11 @@ pub fn wrap_broken(en: &str, it: &str) -> bool {
             _ => {}
         }
         if depth < 0 {
-            return true;
+            return false;
         }
         rest = &rest[len..];
     }
-    // Only judged where the English is balanced itself.
-    depth != 0 && en.matches("<c=").count() == en.matches("</c>").count()
+    depth == 0
 }
 
 /// `it` with the wrapper of `en` put back around the whole text: a translator moved the closing
@@ -389,6 +394,8 @@ mod tests {
         let en = "<c=@abilitytype>Dual Attack</c> skills weaken enemies.";
         assert!(wrap_broken(en, "Le abilità di \"Attacco</c> <c=@abilitytype>doppio\" indeboliscono."));
         assert!(!wrap_broken(en, "Le abilità <c=@abilitytype>Attacco doppio</c> indeboliscono."));
+        // English already starts inside a span: its closing first is not a mistake.
+        assert!(!wrap_broken("Hits.</c><br><c=@reminder>Once.</c>", "Colpi.</c><br><c=@reminder>Una volta.</c>"));
         assert_eq!(fix_wrap(en, "Le abilità di \"Attacco</c> <c=@abilitytype>doppio\" indeboliscono."), "Le abilità di \"Attacco</c> <c=@abilitytype>doppio\" indeboliscono.");
     }
 
