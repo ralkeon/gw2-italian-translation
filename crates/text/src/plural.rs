@@ -16,7 +16,7 @@
 //! (MIT License, Copyright (c) 2026 NikeGipple; see LICENSE).
 
 /// The part to pluralize ends at one of these.
-const STOP: &[&str] = &[
+pub const STOP: &[&str] = &[
     "di", "del", "dello", "della", "dei", "degli", "delle", "da", "dal", "dallo", "dalla", "dai",
     "dagli", "dalle", "a", "al", "allo", "alla", "ai", "agli", "alle", "in", "nel", "nello",
     "nella", "nei", "negli", "nelle", "su", "sul", "sullo", "sulla", "sui", "sugli", "sulle",

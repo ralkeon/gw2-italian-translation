@@ -33,6 +33,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 mod consistency;
 mod glossary;
 mod names;
+mod plurals;
 mod replicate;
 mod review;
 mod sign;
@@ -96,6 +97,7 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
        gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts 300] [--dry-run]
        gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
+       gw2it-server plurals [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
        gw2it-server repair [--db gw2it.db] [--dry-run]";
 
 fn main() {
@@ -104,8 +106,9 @@ fn main() {
     let consistency = args.first().is_some_and(|a| a == "consistency");
     let english_names = args.first().is_some_and(|a| a == "names");
     let review = args.first().is_some_and(|a| a == "review");
+    let plurals = args.first().is_some_and(|a| a == "plurals");
     let repair = args.first().is_some_and(|a| a == "repair");
-    if replicate || consistency || english_names || review || repair {
+    if replicate || consistency || english_names || review || plurals || repair {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -172,6 +175,15 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        return;
+    }
+    if plurals {
+        let Some(file) = options.remove("--translators") else {
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        };
+        let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(200);
+        run_plurals(&db, &file, max_texts, dry_run);
         return;
     }
     if review {
@@ -371,6 +383,33 @@ fn run_review(db: &str, translators_file: &str, max_texts: usize, dry_run: bool)
     }
 }
 
+/// The plurals check (plurals.rs) by hand or from cron: up to `max_texts` texts not checked yet.
+fn run_plurals(db: &str, translators_file: &str, max_texts: usize, dry_run: bool) {
+    let mut chain = Chain::default();
+    chain.set(translators(translators_file));
+    let con = open(db).unwrap_or_else(|e| {
+        eprintln!("cannot open {db}: {e}");
+        std::process::exit(1);
+    });
+    let ask = |system: &str, user: &str| chain.ask(system, user).map_err(|e| e.to_string());
+    match plurals::run(&con, &ask, max_texts, dry_run) {
+        Ok(r) => println!(
+            "plurals: {} texts, {} right, {} fixed ({} rows), {} fixes refused{}{}",
+            r.asked,
+            r.ok,
+            r.fixed,
+            r.rows,
+            r.refused,
+            if dry_run { " (dry run: nothing changed)" } else { "" },
+            r.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),
+        ),
+        Err(e) => {
+            eprintln!("plurals: database: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// The review in the server: the texts that arrive, a batch every REVIEW_PAUSE, up to `daily`
 /// a day; the database is not held while the model thinks.
 fn review_in_background(app: &App, chain: &Chain, daily: usize) {
@@ -463,6 +502,7 @@ fn open(path: &str) -> rusqlite::Result<Connection> {
     con.execute_batch(consistency::SCHEMA)?;
     con.execute_batch(names::SCHEMA)?;
     con.execute_batch(review::SCHEMA)?;
+    con.execute_batch(plurals::SCHEMA)?;
     Ok(con)
 }
 
