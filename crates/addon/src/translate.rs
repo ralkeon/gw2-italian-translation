@@ -204,28 +204,51 @@ impl Worker {
         set_status(&format!("Traduco {n} testi..."));
         let terms = store::glossary();
         match self.chain.translate(&texts, &neighbours, &terms) {
-            Ok(translated) => {
+            Ok(mut translated) => {
                 let mut rejected = 0;
-                for (i, (q, xml)) in batch.iter().zip(&translated.texts).enumerate() {
-                    let Job { id, hash, en, .. } = &q.job;
-                    match q.prepared.restore(xml).and_then(|it| markup::finish(en, &it)) {
-                        Some(it) => {
-                            // Before the plural marks: they are made from the corrected text.
-                            let it = glossary::fix(en, &it, &terms);
-                            let it = plural::pluralize(en, &it);
-                            pipe::send_text(*id, *hash, &it);
-                            let proof = translated.signatures.get(i).map(|s| (s.clone(), xml.clone()));
-                            for (other, _) in same.iter().filter(|(_, first)| *first == i) {
-                                self.known.remove(&(other.job.id, other.job.hash));
-                                copy(&other.job, it.clone(), translated.by.clone(), proof.clone());
+                // The texts whose answer was no good (markup the game would show broken) are asked of
+                // the next translators, one after the other, before the English is given up.
+                let mut pending: Vec<usize> = (0..batch.len()).collect();
+                let mut skip = Vec::new();
+                loop {
+                    skip.push(translated.slot);
+                    let mut still = Vec::new();
+                    for (pos, (&bi, xml)) in pending.iter().zip(&translated.texts).enumerate() {
+                        let q = &batch[bi];
+                        let Job { id, hash, en, .. } = &q.job;
+                        match q.prepared.restore(xml).and_then(|it| markup::finish(en, &it)) {
+                            Some(it) => {
+                                // Before the plural marks: they are made from the corrected text.
+                                let it = glossary::fix(en, &it, &terms);
+                                let it = plural::pluralize(en, &it);
+                                pipe::send_text(*id, *hash, &it);
+                                let proof = translated.signatures.get(pos).map(|s| (s.clone(), xml.clone()));
+                                for (other, _) in same.iter().filter(|(_, first)| *first == bi) {
+                                    self.known.remove(&(other.job.id, other.job.hash));
+                                    copy(&other.job, it.clone(), translated.by.clone(), proof.clone());
+                                }
+                                store::save_translation(Translated { id: *id, hash: *hash, it, source: translated.by.clone(), proof });
+                                self.known.remove(&(*id, *hash));
                             }
-                            store::save_translation(Translated { id: *id, hash: *hash, it, source: translated.by.clone(), proof });
-                            self.known.remove(&(*id, *hash));
+                            None => {
+                                log::warn!("translation of {id} by {} rejected (markup changed): {en:?} -> {xml:?}", translated.by);
+                                still.push(bi);
+                            }
                         }
-                        None => {
-                            // Kept in `known`: not retried in this session.
-                            log::warn!("translation of {id} by {} rejected (markup changed): {en:?} -> {xml:?}", translated.by);
-                            rejected += 1 + same.iter().filter(|(_, first)| *first == i).count() as u64;
+                    }
+                    if still.is_empty() {
+                        break;
+                    }
+                    pending = still;
+                    let texts: Vec<&str> = pending.iter().map(|&i| batch[i].prepared.xml.as_str()).collect();
+                    match self.chain.translate_without(&skip, &texts, &neighbours, &terms) {
+                        Ok(next) => translated = next,
+                        Err(_) => {
+                            // No other translator: the English stays. Kept in `known`: not retried in this session.
+                            for &bi in &pending {
+                                rejected += 1 + same.iter().filter(|(_, first)| *first == bi).count() as u64;
+                            }
+                            break;
                         }
                     }
                 }

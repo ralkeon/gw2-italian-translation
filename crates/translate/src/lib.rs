@@ -224,6 +224,8 @@ pub struct Translated {
     pub by: String,
     /// The server's signature of each text, when it made them; else empty.
     pub signatures: Vec<String>,
+    /// The position of the translator in the chain, to ask the next ones when a text is no good.
+    pub slot: usize,
 }
 
 impl Chain {
@@ -252,8 +254,17 @@ impl Chain {
     /// The first translator that is not paused and answers. A translator that refuses the texts
     /// (BadRequest) is not paused, but the next one gets them. The error is the last one met.
     pub fn translate(&self, texts: &[&str], neighbours: &str, terms: &[Term]) -> Result<Translated, Error> {
+        self.translate_without(&[], texts, neighbours, terms)
+    }
+
+    /// As `translate`, but not by the translators at the positions in `skip` (the ones that already
+    /// answered and whose answer was no good: markup the game would show broken).
+    pub fn translate_without(&self, skip: &[usize], texts: &[&str], neighbours: &str, terms: &[Term]) -> Result<Translated, Error> {
         let mut last = Error::Paused;
-        for slot in &self.slots {
+        for (position, slot) in self.slots.iter().enumerate() {
+            if skip.contains(&position) {
+                continue;
+            }
             let now = Instant::now();
             if slot.paused_until.lock().unwrap().is_some_and(|t| now < t) {
                 continue;
@@ -261,7 +272,7 @@ impl Chain {
             match slot.engine.translate(texts, neighbours, terms) {
                 Ok((texts, by, signatures)) => {
                     *slot.paused_until.lock().unwrap() = None;
-                    return Ok(Translated { texts, by, signatures });
+                    return Ok(Translated { texts, by, signatures, slot: position });
                 }
                 Err(e) => {
                     let pause = slot.engine.pause(&e);
