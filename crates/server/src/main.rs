@@ -305,19 +305,20 @@ fn run_names(db: &str, fetch: bool, translators_file: Option<&str>, max_texts: u
     }
 }
 
-/// The `%` signs a translator added or moved (markup::fix_percent), in every row, hand corrections
-/// too: the game cuts the text there. Returns the rows repaired.
+/// The `%` signs a translator added or moved and the wrapper (`%str1%%str2%`... `<c=...>`) it moved
+/// into the sentence (markup::repair), in every row, hand corrections too: the game cuts the text
+/// or shows it broken. Returns the rows repaired.
 fn run_repair(con: &Connection, dry_run: bool) -> rusqlite::Result<usize> {
     let rows: Vec<(i64, String, String, String)> = {
-        let mut stmt = con.prepare("SELECT id, hash, en, it FROM translations WHERE instr(it, '%') > 0")?;
+        let mut stmt = con.prepare("SELECT id, hash, en, it FROM translations WHERE instr(it, '%') > 0 OR instr(it, '</c>') > 0")?;
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?
     };
     let now = now_ms();
     let mut repaired = 0;
     for (id, hash, en, it) in rows {
-        let new = gw2it_text::markup::fix_percent(&en, &it);
+        let new = gw2it_text::markup::repair(&en, &it);
         if new == it {
-            if gw2it_text::markup::stray_percent(&it) {
+            if gw2it_text::markup::stray_percent(&it) || gw2it_text::markup::wrap_broken(&en, &it) {
                 eprintln!("repair: {id} {it:?}: cannot be repaired");
             }
             continue;
@@ -656,7 +657,7 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
             row[3] = name.into();
         }
         // A `%` a translator added cuts the text in the game: repaired in every row.
-        let repaired = gw2it_text::markup::fix_percent(row[2].as_str().unwrap_or(""), row[3].as_str().unwrap_or(""));
+        let repaired = gw2it_text::markup::repair(row[2].as_str().unwrap_or(""), row[3].as_str().unwrap_or(""));
         row[3] = repaired.into();
         // The glossary's fixes (the contributors' terms, the consistency job's), at once; the
         // language model's review follows in the background (review.rs).

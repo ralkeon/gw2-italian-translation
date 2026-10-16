@@ -93,6 +93,103 @@ pub fn token_mismatch(en: &str, it: &str) -> Vec<String> {
     want.into_iter().map(|t| format!("-{t}")).chain(extra).collect()
 }
 
+/// `en` as `opens + body + closes`, when it is a name or a sentence wrapped in tokens
+/// (`%str1%%str2%Seer Pants%str3%%str4%`, `<c=#ccbb66>Eternal Forgemaster</c>`): the body has no
+/// token of its own (grammar marks apart) and both ends have at least one.
+fn wrapped(en: &str) -> Option<(&str, &str)> {
+    // (start, length) of each fixed token, in order, and whether anything else is between them.
+    let mut tokens = Vec::new();
+    let mut rest = en;
+    let mut at = 0;
+    while let Some(c) = rest.chars().next() {
+        let len = token_len(rest).unwrap_or(c.len_utf8());
+        if token_len(rest).is_some() && !is_grammar(&rest[..len]) && &rest[..len] != "
+" {
+            tokens.push((at, len));
+        }
+        rest = &rest[len..];
+        at += len;
+    }
+    // The leading run of tokens ends where the first gap starts; the trailing one begins at the last gap.
+    let mut open_end = 0;
+    while let Some(&(s, l)) = tokens.iter().find(|(s, _)| *s == open_end) {
+        open_end = s + l;
+    }
+    let mut close_start = en.len();
+    while let Some(&(s, _)) = tokens.iter().find(|(s, l)| s + l == close_start) {
+        close_start = s;
+    }
+    let body = en.get(open_end..close_start)?;
+    let body_has_token = tokens.iter().any(|(s, _)| *s >= open_end && *s < close_start);
+    (open_end > 0 && close_start < en.len() && !body_has_token && body.chars().any(char::is_alphabetic))
+        .then(|| (&en[..open_end], &en[close_start..]))
+}
+
+/// Whether the wrapper of `en` (see `wrapped`) is broken in `it`: the opening tokens not at the
+/// start, the closing ones not at the end, or a `</c>` before the `<c=...>` it closes.
+pub fn wrap_broken(en: &str, it: &str) -> bool {
+    if let Some((open, close)) = wrapped(en) {
+        let it = it.trim();
+        if !it.starts_with(open) || !it.ends_with(close) {
+            return true;
+        }
+    }
+    let mut depth = 0i32;
+    let mut rest = it;
+    while let Some(c) = rest.chars().next() {
+        let len = token_len(rest).unwrap_or(c.len_utf8());
+        match &rest[..len] {
+            t if t.starts_with("<c=") => depth += 1,
+            "</c>" => depth -= 1,
+            _ => {}
+        }
+        if depth < 0 {
+            return true;
+        }
+        rest = &rest[len..];
+    }
+    // Only judged where the English is balanced itself.
+    depth != 0 && en.matches("<c=").count() == en.matches("</c>").count()
+}
+
+/// `it` with the wrapper of `en` put back around the whole text: a translator moved the closing
+/// tokens inside the sentence (`Gilet%str3%%str4% %str1%%str2%di pelle`). `it` as it is if `en` is
+/// not wrapped, the wrapper is fine, or the tokens are not the ones of `en`.
+pub fn fix_wrap(en: &str, it: &str) -> String {
+    let Some((open, close)) = wrapped(en) else { return it.to_owned() };
+    if !wrap_broken(en, it) || !token_mismatch(en, it).is_empty() {
+        return it.to_owned();
+    }
+    let mut bare = String::with_capacity(it.len());
+    let mut rest = it;
+    while let Some(c) = rest.chars().next() {
+        let len = token_len(rest).unwrap_or(c.len_utf8());
+        let token = &rest[..len];
+        if !(token_len(rest).is_some() && (open.contains(token) || close.contains(token)) && !is_grammar(token)) {
+            bare.push_str(token);
+        }
+        rest = &rest[len..];
+    }
+    while bare.contains("  ") {
+        bare = bare.replace("  ", " ");
+    }
+    let out = format!("{open}{}{close}", bare.trim());
+    if token_mismatch(en, &out).is_empty() && !wrap_broken(en, &out) { out } else { it.to_owned() }
+}
+
+/// Everything wrong with the markup that can be put right from the English: the wrapper
+/// (`fix_wrap`) and the `%` signs (`fix_percent`).
+pub fn repair(en: &str, it: &str) -> String {
+    fix_percent(en, &fix_wrap(en, it))
+}
+
+/// A translator's answer after `repair` and the spaces put back; None if the markup is still
+/// broken (the game would show it wrong: better English than that).
+pub fn finish(en: &str, it: &str) -> Option<String> {
+    let it = repair(en, &fix_spacing(en, &fix_wrap(en, it)));
+    (!wrap_broken(en, &it) && !stray_percent(&it)).then_some(it)
+}
+
 /// Puts back the spaces a translator dropped next to the tokens of `en`: `Level %num1% %str1%`
 /// came back as `Livello  %num1%%str1%`, and the game no longer saw the `[f]` that `%str1%`
 /// carries as a gender mark. Doubled spaces are collapsed.
@@ -271,6 +368,28 @@ mod tests {
         // Nothing stray, or a number that is not there: as it is.
         assert_eq!(fix_percent("10%% more", "10%% in più"), "10%% in più");
         assert_eq!(fix_percent("10%% more", "dieci % in più"), "dieci % in più");
+    }
+
+    #[test]
+    fn wrapper_kept_around_the_text() {
+        let en = "%str1%%str2%Seer Pants%str3%%str4%";
+        let bad = "Pantaloni%str3%%str4% %str1%%str2%del Veggente";
+        assert!(wrap_broken(en, bad));
+        assert_eq!(fix_wrap(en, bad), "%str1%%str2%Pantaloni del Veggente%str3%%str4%");
+        assert!(!wrap_broken(en, "%str1%%str2%Pantaloni del Veggente%str3%%str4%"));
+        assert_eq!(fix_wrap("<c=#ccbb66>Eternal Forgemaster</c>", "Maestro</c> della Fucina <c=#ccbb66>Eterna"), "<c=#ccbb66>Maestro della Fucina Eterna</c>");
+        // Grammar marks stay where they are.
+        assert_eq!(
+            fix_wrap("%str1%%str2%Ruby Shard[s]%str3%%str4%", "Frammento[pl:\"Frammenti\"]%str3%%str4% %str1%%str2%di rubino"),
+            "%str1%%str2%Frammento[pl:\"Frammenti\"] di rubino%str3%%str4%"
+        );
+        // Not wrapped, or a span inside a sentence: left alone (judged by wrap_broken).
+        assert_eq!(fix_wrap("%str1% is now %str2%.", "%str2% è ora %str1%."), "%str2% è ora %str1%.");
+        assert!(!wrap_broken("%str1% is now %str2%.", "%str2% è ora %str1%."));
+        let en = "<c=@abilitytype>Dual Attack</c> skills weaken enemies.";
+        assert!(wrap_broken(en, "Le abilità di \"Attacco</c> <c=@abilitytype>doppio\" indeboliscono."));
+        assert!(!wrap_broken(en, "Le abilità <c=@abilitytype>Attacco doppio</c> indeboliscono."));
+        assert_eq!(fix_wrap(en, "Le abilità di \"Attacco</c> <c=@abilitytype>doppio\" indeboliscono."), "Le abilità di \"Attacco</c> <c=@abilitytype>doppio\" indeboliscono.");
     }
 
     fn round_trip(en: &str, fake_translation: impl Fn(&str) -> String) -> Option<String> {

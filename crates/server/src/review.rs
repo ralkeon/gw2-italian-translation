@@ -154,7 +154,7 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool) 
     if !names::english_brought_in(en, old, new, &keep(names, en, old)).is_empty() {
         return Some("English brought back");
     }
-    if !markup::token_mismatch(en, new).is_empty() || markup::stray_percent(new) || old.contains("[pl:") != new.contains("[pl:") {
+    if !markup::token_mismatch(en, new).is_empty() || markup::stray_percent(new) || markup::wrap_broken(en, new) || old.contains("[pl:") != new.contains("[pl:") {
         return Some("markup changed");
     }
     if glossary::fix(en, new, terms) != new {

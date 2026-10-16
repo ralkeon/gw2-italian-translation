@@ -208,10 +208,10 @@ impl Worker {
                 let mut rejected = 0;
                 for (i, (q, xml)) in batch.iter().zip(&translated.texts).enumerate() {
                     let Job { id, hash, en, .. } = &q.job;
-                    match q.prepared.restore(xml) {
+                    match q.prepared.restore(xml).and_then(|it| markup::finish(en, &it)) {
                         Some(it) => {
                             // Before the plural marks: they are made from the corrected text.
-                            let it = glossary::fix(en, &markup::fix_percent(en, &markup::fix_spacing(en, &it)), &terms);
+                            let it = glossary::fix(en, &it, &terms);
                             let it = plural::pluralize(en, &it);
                             pipe::send_text(*id, *hash, &it);
                             let proof = translated.signatures.get(i).map(|s| (s.clone(), xml.clone()));

@@ -11,6 +11,6 @@ pub mod plural;
 /// The text the game shows for `en`, from the translator's XML answer `xml` (None if it lost,
 /// repeated or invented a placeholder). `prepared` comes from `markup::prepare(en)`.
 pub fn finish(en: &str, prepared: &markup::Prepared, xml: &str) -> Option<String> {
-    let it = prepared.restore(xml)?;
-    Some(plural::pluralize(en, &markup::fix_percent(en, &markup::fix_spacing(en, &it))))
+    let it = markup::finish(en, &prepared.restore(xml)?)?;
+    Some(plural::pluralize(en, &it))
 }

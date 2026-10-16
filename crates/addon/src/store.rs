@@ -314,7 +314,7 @@ fn repair_auto(con: &Connection) -> rusqlite::Result<()> {
     let mut done = 0;
     let mut update = con.prepare("UPDATE translations SET it = ?3, at = ?4 WHERE id = ?1 AND hash = ?2")?;
     for (id, hash, en, it) in rows {
-        let fixed = plural::pluralize(&en, &glossary::fix(&en, &markup::fix_spacing(&en, &it), &terms));
+        let fixed = plural::pluralize(&en, &glossary::fix(&en, &markup::repair(&en, &markup::fix_spacing(&en, &it)), &terms));
         if fixed != it {
             update.execute(params![id, hash, fixed, now_ms()])?;
             REPAIRED.lock().unwrap().push((id, hash as u64, fixed));

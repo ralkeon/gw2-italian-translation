@@ -506,6 +506,14 @@ fn apply(con: &mut Connection, rows: &[Remote], mark: Mark, seq_key: &str) -> Re
                 log::warn!("sync: translation of {id} from {author} breaks the markup ({}): skipped", mismatch.join(" "));
                 continue;
             }
+            // The wrapper and the % signs a translator moved, put right; a machine translation that
+            // stays broken is not taken (the English is better than a text the game shows wrong).
+            let repaired = markup::repair(&en, it);
+            let it = repaired.as_str();
+            if status == "auto" && (markup::wrap_broken(&en, it) || markup::stray_percent(it)) {
+                log::warn!("sync: translation of {id} from {author} has the markup in the wrong place: skipped");
+                continue;
+            }
             // A machine translation from outside gets our glossary too (never a hand correction).
             let fixed;
             let it = if status == "auto" {
