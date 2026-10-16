@@ -182,10 +182,25 @@ pub fn fix_wrap(en: &str, it: &str) -> String {
     if token_mismatch(en, &out).is_empty() && !wrap_broken(en, &out) { out } else { it.to_owned() }
 }
 
-/// Everything wrong with the markup that can be put right from the English: the wrapper
-/// (`fix_wrap`) and the `%` signs (`fix_percent`).
+/// The apostrophes and double quotes the game's own English uses (`'` and `"`): translators write
+/// `’ ‘` and `“ ” „` instead. `« »` are left as they are.
+pub fn straight_quotes(it: &str) -> String {
+    if !it.contains(['’', '‘', 'ʼ', '“', '”', '„']) {
+        return it.to_owned();
+    }
+    it.chars()
+        .map(|c| match c {
+            '’' | '‘' | 'ʼ' => '\'',
+            '“' | '”' | '„' => '"',
+            c => c,
+        })
+        .collect()
+}
+
+/// Everything wrong with the markup and the quotes that can be put right from the English: the
+/// wrapper (`fix_wrap`), the `%` signs (`fix_percent`) and the quotes (`straight_quotes`).
 pub fn repair(en: &str, it: &str) -> String {
-    fix_percent(en, &fix_wrap(en, it))
+    fix_percent(en, &straight_quotes(&fix_wrap(en, it)))
 }
 
 /// A translator's answer after `repair` and the spaces put back; None if the markup is still
@@ -373,6 +388,13 @@ mod tests {
         // Nothing stray, or a number that is not there: as it is.
         assert_eq!(fix_percent("10%% more", "10%% in più"), "10%% in più");
         assert_eq!(fix_percent("10%% more", "dieci % in più"), "dieci % in più");
+    }
+
+    #[test]
+    fn quotes_made_straight() {
+        assert_eq!(straight_quotes("L’Arco dell’Alba: “Fuoco” e ‘Ghiaccio’"), "L'Arco dell'Alba: \"Fuoco\" e 'Ghiaccio'");
+        assert_eq!(straight_quotes("«Arco» d'oro"), "«Arco» d'oro");
+        assert_eq!(repair("Dawn's Bow", "Arco dell’Alba"), "Arco dell'Alba");
     }
 
     #[test]

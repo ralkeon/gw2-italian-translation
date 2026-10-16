@@ -335,7 +335,7 @@ pub fn run(con: &Connection, ask: Option<&Ask>, options: &Options) -> rusqlite::
             "UPDATE translations SET it = ?3, at = ?5, status = 'auto', author = ?4, trust = 1,
                  seq = (SELECT coalesce(max(seq), 0) FROM translations) + 1
              WHERE id = ?1 AND hash = ?2 AND it = ?6 AND trust <= 1",
-            params![row.id, row.hash, new, AUTHOR, now, row.it],
+            params![row.id, row.hash, markup::straight_quotes(new), AUTHOR, now, row.it],
         )?;
         if changed > 0 {
             report.rewritten += 1;

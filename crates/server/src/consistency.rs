@@ -388,7 +388,7 @@ fn settle(
                      trust = CASE WHEN trust >= 2 THEN trust ELSE 1 END,
                      seq = (SELECT coalesce(max(seq), 0) FROM translations) + 1
                  WHERE id = ?1 AND hash = ?2 AND it = ?6 AND (trust <= 1 OR ?7)",
-                params![entry.id, entry.hash, new, AUTHOR, now, entry.it, all],
+                params![entry.id, entry.hash, markup::straight_quotes(new), AUTHOR, now, entry.it, all],
             )?;
             if changed > 0 {
                 con.execute(

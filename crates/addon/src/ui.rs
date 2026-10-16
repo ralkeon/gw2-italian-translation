@@ -185,7 +185,7 @@ fn editor(ui: &Ui, state: &mut State, user: &str) {
 
     if mismatch.is_empty() && !empty {
         if ui.button("Salva") {
-            let it = state.edit.clone();
+            let it = markup::straight_quotes(&state.edit);
             store::save_manual(row.id, row.hash, &row.en, it.clone(), user);
             update_row(state, row.id, row.hash, Some(it), Some("manual"));
         }

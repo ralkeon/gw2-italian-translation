@@ -237,7 +237,7 @@ pub fn apply(con: &Connection, text: &Text, verdict: &Verdict) -> rusqlite::Resu
             "UPDATE translations SET it = ?3, at = ?4, status = 'auto', author = ?5, trust = 1,
                  seq = (SELECT coalesce(max(seq), 0) FROM translations) + 1
              WHERE id = ?1 AND hash = ?2",
-            params![id, text.hash, new, now, AUTHOR],
+            params![id, text.hash, markup::straight_quotes(&new), now, AUTHOR],
         )?;
     }
     con.execute(
