@@ -20,11 +20,10 @@ use std::collections::HashMap;
 /// One-word names that are common English: as a whole text they are often a label, a damage type,
 /// a key, an achievement, not the skill.
 const COMMON: &[&str] = &[
-    // Core specializations named after a plain word.
-    "Air", "Arcane", "Arms", "Chaos", "Curses", "Defense", "Devastation", "Discipline", "Domination", "Dueling",
-    "Earth", "Explosives", "Fire", "Firearms", "Honor", "Illusions", "Inspiration", "Inventions", "Invocation",
-    "Marksmanship", "Radiance", "Retribution", "Salvation", "Skirmishing", "Spite", "Strength", "Tactics", "Tools",
-    "Trickery", "Valor", "Virtues", "Water", "Zeal", "Corruption", "Acrobatics", "Alchemy",
+    // Core specializations named after a word the game uses for something else too: the elements
+    // (attunements, damage), skill types ("Corruption."), "Chaos Aura", the Tools of a menu. The
+    // other core specializations (Spite, Zeal, Marksmanship...) are names like the elite ones.
+    "Air", "Arms", "Chaos", "Defense", "Earth", "Fire", "Tools", "Water", "Corruption",
     // Skills and traits.
     "Abstraction", "Anchor", "Anguish", "Awakening", "Bandage", "Banish", "Barrage", "Bite", "Blink", "Bloodlust",
     "Blowtorch", "Blunderbuss", "Bluster", "Boil", "Bomb", "Bonfire", "Bop", "Brilliance", "Brutality", "Bulwark",
@@ -62,6 +61,10 @@ const TITLE_WORDS: &[&str] = &["and", "or", "with"];
 #[derive(Default, Clone)]
 pub struct Names {
     by_first: HashMap<String, Vec<String>>,
+    /// The texts that are a stat prefix ("Berserker's") or an item named after one ("Berserker's
+    /// Silk Insignia"), with the prefix: it stays in English, without the "'s" and the same in the
+    /// plural, after the Italian noun ("Insegna in seta Berserker").
+    affixed: HashMap<String, String>,
 }
 
 /// A word of a text: letters, digits and the apostrophes, hyphens and dots inside a name.
@@ -137,7 +140,24 @@ impl Names {
         for list in by_first.values_mut() {
             list.sort_by_key(|n| std::cmp::Reverse(n.len()));
         }
-        Self { by_first }
+        Self { by_first, affixed: HashMap::new() }
+    }
+
+    /// With the stat prefixes: `list` has (a prefix or an item named after one, the prefix).
+    pub fn with_affixes<I: IntoIterator<Item = (S, S)>, S: AsRef<str>>(mut self, list: I) -> Self {
+        self.affixed = list.into_iter().map(|(text, affix)| (text.as_ref().trim().to_owned(), affix.as_ref().trim().to_owned())).collect();
+        self
+    }
+
+    /// The prefix `en` is or is named after, as the Italian keeps it ("Berserker"), as part of `en`:
+    /// the whole text but its placeholders ("%str1%") and plural marks.
+    pub fn affix<'a>(&self, en: &'a str) -> Option<&'a str> {
+        let bare = crate::markup::strip_grammar(en);
+        let bare = strip_tokens(bare.trim());
+        let affix = self.affixed.get(bare)?;
+        let base = affix.strip_suffix("'s").or_else(|| affix.strip_suffix("’s")).unwrap_or(affix);
+        let at = en.find(base)?;
+        Some(&en[at..at + base.len()])
     }
 
     /// The longest name at word `w` of `s`, and where it ends.
@@ -249,19 +269,46 @@ impl Names {
                 out.push(name);
             }
         }
+        if let Some(affix) = self.affix(en)
+            && !has_word(it, &[affix])
+            && !out.contains(&affix)
+        {
+            out.push(affix);
+        }
         out
+    }
+}
+
+/// `s` without the placeholders around it: "%str1%%str2%Berserker's Axe%str3%%str4%".
+fn strip_tokens(s: &str) -> &str {
+    let mut s = s;
+    loop {
+        let before = s;
+        if let Some(rest) = s.strip_prefix('%').and_then(|r| r.find('%').map(|i| &r[i + 1..])) {
+            s = rest;
+        }
+        if let Some(rest) = s.strip_suffix('%').and_then(|r| r.rfind('%').map(|i| &r[..i])) {
+            s = rest;
+        }
+        if s == before {
+            return s.trim();
+        }
     }
 }
 
 /// Words of the game's mechanics that stay in English too, in any case and in sentences, with the
 /// forms they take: Italian players say "boon" and "condi", "benedizione" is no game word.
 /// "Black Lion", the company, too: players say "forziere Black Lion", never "Leone Nero". And
-/// "focus", the off-hand weapon: "focalizzatore" and "concentrazione" are no game words.
+/// "focus", the off-hand weapon: "focalizzatore" and "concentrazione" are no game words. And the
+/// upgrades "rune", "sigil" and "relic", the words of the wiki, the builds and the Trading Post.
 pub const TERMS: &[(&str, &[&str])] = &[
     ("boon", &["boon", "boons"]),
     ("condition", &["condition", "conditions"]),
     ("Black Lion", &["black lion"]),
     ("focus", &["focus", "foci"]),
+    ("rune", &["rune", "runes"]),
+    ("sigil", &["sigil", "sigils"]),
+    ("relic", &["relic", "relics"]),
 ];
 
 /// Whether `s` has one of `forms` (one word or more, in a row) as words, in any case.
@@ -406,6 +453,31 @@ mod tests {
         assert!(kept("<c=@Might>text</c>").is_empty());
         // A name that would end inside a character of the text.
         assert!(kept("Signet of Ra•").is_empty());
+    }
+
+    #[test]
+    fn stat_prefixes() {
+        let n = names().with_affixes([
+            ("Berserker's", "Berserker's"),
+            ("Berserker's Silk Insignia", "Berserker's"),
+            ("Carrion Pearl Broadsword", "Carrion"),
+        ]);
+        assert_eq!(n.affix("Berserker's Silk Insignia[s]"), Some("Berserker"));
+        assert_eq!(n.affix("%str1%%str2%Carrion Pearl Broadsword%str3%%str4%"), Some("Carrion"));
+        assert_eq!(n.affix("Berserker's"), Some("Berserker"));
+        assert_eq!(n.affix("Berserker's Stance"), None);
+        assert_eq!(n.missing("Berserker's Silk Insignia[s]", "Distintivo[pl:\"Distintivi\"] in seta del Berserker"), Vec::<&str>::new());
+        assert_eq!(n.missing("Carrion Pearl Broadsword", "Spadone di perla della carogna"), ["Carrion"]);
+        assert!(n.missing("Carrion Pearl Broadsword", "Spadone di perla Carrion").is_empty());
+        assert_eq!(strip_tokens("%str1%%str2%Axe%str3%%str4%"), "Axe");
+        assert_eq!(strip_tokens("100%"), "100%");
+    }
+
+    #[test]
+    fn upgrades_are_terms() {
+        assert_eq!(terms_missing("Equip a sigil.", "Equipaggia un sigillo."), ["sigil"]);
+        assert!(terms_missing("Salvage the runes.", "Ricicla le rune.").is_empty());
+        assert_eq!(terms_missing("Relics grant bonuses.", "Le reliquie conferiscono bonus."), ["relic"]);
     }
 
     #[test]

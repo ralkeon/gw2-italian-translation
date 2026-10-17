@@ -1,15 +1,18 @@
 //! Names that stay in English (gw2it_text::names): `gw2it-server names`, run by cron.
 //!
 //! - `--fetch` takes the list from the official API: professions, specializations, the skills of
-//!   the professions, traits, legendary weapons, armour, backs, trinkets and relics; boons and
-//!   conditions are added here. A name, once known, stays (the API drops skills it retires).
+//!   the professions, traits, legendary weapons, armour, backs and trinkets, the runes, sigils
+//!   and relics; boons and conditions are added here. A name, once known, stays (the API drops
+//!   skills it retires). Into `affixes` go the stat prefixes of three attributes or more
+//!   ("Berserker's") and the items named after one ("Berserker's Silk Insignia"): the prefix
+//!   stays in English, the item's noun is Italian ("Insegna in seta Berserker").
 //! - Then the machine translations (trust 1 and below) that lost a name get it back: a text that
 //!   is the name becomes the name; in any other a language model of translators.json puts the
 //!   English name where its Italian is, changing as little as it can (a translator given the
 //!   names as placeholders scrambles the sentence around them). What it answers is checked: the
 //!   names there, the markup of the English. Hand corrections are only counted. Every rewrite goes
 //!   into `history` and `names_log`, and to the addons with /sync.
-//! - The words of the mechanics in `gw2it_text::names::TERMS` (boon, condition, focus) are put back the
+//! - The words of the mechanics in `gw2it_text::names::TERMS` (boon, condition, focus, rune...) are put back the
 //!   same way, in any case; where the model says the word is not the mechanic ("a great boon" of
 //!   a dialogue) the text goes into `names_skip`, not asked again while it stays the same.
 
@@ -29,7 +32,13 @@ pub const SCHEMA: &str = "
 -- The names that stay in English, from the official API.
 CREATE TABLE IF NOT EXISTS english_names (
     name  TEXT    PRIMARY KEY,
-    kind  TEXT    NOT NULL,       -- profession, specialization, skill, trait, item, boon, condition
+    kind  TEXT    NOT NULL,       -- profession, specialization, skill, trait, item, upgrade, boon, condition
+    added INTEGER NOT NULL
+);
+-- The stat prefixes and the items named after one, with the prefix (gw2it_text::names::Names::affix).
+CREATE TABLE IF NOT EXISTS affixes (
+    text  TEXT    PRIMARY KEY,
+    affix TEXT    NOT NULL,
     added INTEGER NOT NULL
 );
 -- Every text the job rewrote, to undo it if needed.
@@ -59,28 +68,35 @@ const CONDITIONS: &[&str] = &[
     "Torment", "Vulnerability", "Weakness",
 ];
 const ITEM_TYPES: &[&str] = &["Weapon", "Armor", "Back", "Trinket", "Relic"];
+/// The items with stats: named after their prefix ("Berserker's Pearl Broadsword").
+const STAT_TYPES: &[&str] = &["Weapon", "Armor", "Back", "Trinket"];
+/// The crafting materials named after a prefix: "Berserker's Silk Insignia".
+const STAT_MATERIALS: &[&str] = &["Insignia", "Inscription"];
 /// Texts given to the model at once.
 const BATCH: usize = 20;
 const TEXT_MAX: usize = 4000;
 const AUTHOR: &str = "names";
 
 const SYSTEM: &str = "You fix the Italian translation of texts of the game Guild Wars 2. In each text, \
-the names in \"keep\" (skills, traits, specializations, professions, legendary items, boons, conditions) \
+the names in \"keep\" (skills, traits, specializations, professions, legendary items, runes, sigils, relics, \
+stat prefixes, boons, conditions) \
 must stay exactly as in the English, not translated, so that players can talk about them with players \
 of other languages. Rewrite the Italian changing only what is needed: put each English name where its \
 Italian translation is, and fix only the words right around it (articles, prepositions: \"l'Elisir B\" \
 becomes \"l'Elixir B\"). Do not translate anything again, do not change the rest. Keep every %token%, \
 every <tag>, every [tag] and every line break exactly as they are.
 
-The lowercase words in \"keep\" are words of the game's mechanics: \"boon\" (benedizione, vantaggio) and \"condition\" (condizione, alterazione). Use the English word wherever the Italian translated it, as an Italian loanword: it does not change in the plural (\"i boon\", \"le condition\"; \"boon\" is masculine, \"condition\" feminine), it is lowercase in a sentence and capitalised in a title or label (\"Barriera per Boon\"), and it is never elided (\"il boon\", \"della condition\", never \"l'boon\"). The attributes \"Condition Damage\", \"Condition Duration\" and \"Boon Duration\" stay whole in English (\"+100 Condition Damage\"). \"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". Nothing else goes back to English: other attributes (Precisione, Vitalità, Potenza), skill types and labels (\"Incantesimo minore.\", \"Passiva del Sigillo:\") stay as the Italian has them. If in a text the word is not the mechanic or the weapon (\"your help was a great boon\", \"in good condition\", \"focus your mind\"), answer {\"n\": <n>, \"skip\": true} for it instead.
+The lowercase words in \"keep\" are words of the game's mechanics: \"boon\" (benedizione, vantaggio) and \"condition\" (condizione, alterazione). Use the English word wherever the Italian translated it, as an Italian loanword: it does not change in the plural (\"i boon\", \"le condition\"; \"boon\" is masculine, \"condition\" feminine), it is lowercase in a sentence and capitalised in a title or label (\"Barriera per Boon\"), and it is never elided (\"il boon\", \"della condition\", never \"l'boon\"). The attributes \"Condition Damage\", \"Condition Duration\" and \"Boon Duration\" stay whole in English (\"+100 Condition Damage\"). \"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". Nothing else goes back to English: other attributes (Precisione, Vitalità, Potenza), skill types and labels (\"Incantesimo minore.\", \"Passiva del Sigillo:\") stay as the Italian has them. \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: they stay in English as Italian loanwords, the same in the plural (\"la rune\", \"le rune\", \"il sigil\", \"i sigil\", \"la relic\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\". A stat prefix in \"keep\" (\"Berserker\", \"Carrion\", \"Knight\") stays in English without the \"'s\", after the Italian noun, with no article or preposition and the same in the plural (\"Insegna in seta Berserker\", \"Spadone di perla Carrion\", \"Cappotto esaltato Knight\"), never \"del Berserker\" or \"della Carogna\". If in a text the word is not the mechanic, the weapon or the upgrade (\"your help was a great boon\", \"in good condition\", \"focus your mind\"), answer {\"n\": <n>, \"skip\": true} for it instead.
 
 Answer with JSON: {\"texts\": [{\"n\": <the text's n>, \"it\": \"<the fixed Italian>\"}]}";
 
-/// The names, without the plain English words (gw2it_text::names).
+/// The names, without the plain English words (gw2it_text::names), and the stat prefixes.
 pub fn load(con: &Connection) -> rusqlite::Result<Names> {
     let mut stmt = con.prepare_cached("SELECT name FROM english_names")?;
     let list: Vec<String> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-    Ok(Names::new(list))
+    let mut stmt = con.prepare_cached("SELECT text, affix FROM affixes")?;
+    let affixes: Vec<(String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    Ok(Names::new(list).with_affixes(affixes))
 }
 
 /// The names added after `since` (unix ms), and the time of the newest (`since` if none), for /sync.
@@ -129,8 +145,11 @@ fn all(agent: &Agent, endpoint: &str) -> Result<Vec<Value>, String> {
     }
 }
 
-/// The names of the official API, by kind.
-fn from_api() -> Result<Vec<(String, &'static str)>, String> {
+/// The names with their kind, and the affixes (text, prefix).
+type FromApi = (Vec<(String, &'static str)>, Vec<(String, String)>);
+
+/// The names of the official API, by kind, and the affixes.
+fn from_api() -> Result<FromApi, String> {
     let agent: Agent = Agent::config_builder().timeout_global(Some(Duration::from_secs(60))).http_status_as_error(false).build().into();
     let name = |v: &Value| v["name"].as_str().unwrap_or("").trim().to_owned();
     let mut out = Vec::new();
@@ -149,26 +168,58 @@ fn from_api() -> Result<Vec<(String, &'static str)>, String> {
     for v in all(&agent, "traits")? {
         out.push((name(&v), "trait"));
     }
+    // The prefixes of three attributes or more: the minor ones ("Mighty") are plain adjectives.
+    let mut stats = std::collections::HashMap::new();
+    for v in all(&agent, "itemstats")? {
+        let affix = name(&v);
+        let simple = !affix.contains(" and ") && usable(&affix);
+        if simple && v["attributes"].as_array().is_some_and(|a| a.len() >= 3) {
+            stats.insert(v["id"].as_i64().unwrap_or(-1), affix);
+        }
+    }
+    let mut affixes: Vec<(String, String)> = stats.values().map(|a| (a.clone(), a.clone())).collect();
     for v in all(&agent, "items")? {
-        if v["rarity"] == "Legendary" && v["type"].as_str().is_some_and(|t| ITEM_TYPES.contains(&t)) {
-            out.push((name(&v), "item"));
+        let kind = v["type"].as_str().unwrap_or("");
+        let item = name(&v);
+        if v["rarity"] == "Legendary" && ITEM_TYPES.contains(&kind) || kind == "Relic" {
+            out.push((item.clone(), "item"));
+        }
+        if kind == "UpgradeComponent" && matches!(v["details"]["type"].as_str(), Some("Rune" | "Sigil")) {
+            out.push((item.clone(), "upgrade"));
+        }
+        // Named after its own prefix, or a material of a prefix ("Berserker's Silk Insignia").
+        let own = STAT_TYPES
+            .contains(&kind)
+            .then(|| v["details"]["infix_upgrade"]["id"].as_i64().and_then(|id| stats.get(&id)))
+            .flatten()
+            .filter(|a| item.starts_with(&format!("{a} ")));
+        let material = (kind == "CraftingMaterial" && STAT_MATERIALS.iter().any(|m| item.ends_with(m)))
+            .then(|| stats.values().find(|a| item.starts_with(&format!("{a} "))))
+            .flatten();
+        if let Some(affix) = own.or(material) {
+            affixes.push((item.clone(), affix.clone()));
         }
     }
     out.extend(BOONS.iter().map(|b| ((*b).to_owned(), "boon")));
     out.extend(CONDITIONS.iter().map(|c| ((*c).to_owned(), "condition")));
     out.retain(|(n, _)| usable(n));
-    Ok(out)
+    Ok((out, affixes))
 }
 
 /// Adds the names of the official API. Returns how many are new.
 pub fn fetch(con: &Connection) -> Result<usize, String> {
-    let list = from_api()?;
+    let (list, affixes) = from_api()?;
     let now = now_ms();
     let tx = con.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut added = 0;
     for (name, kind) in list {
         added += tx
             .execute("INSERT OR IGNORE INTO english_names (name, kind, added) VALUES (?1, ?2, ?3)", params![name, kind, now])
+            .map_err(|e| e.to_string())?;
+    }
+    for (text, affix) in affixes {
+        added += tx
+            .execute("INSERT OR IGNORE INTO affixes (text, affix, added) VALUES (?1, ?2, ?3)", params![text, affix, now])
             .map_err(|e| e.to_string())?;
     }
     tx.commit().map_err(|e| e.to_string())?;
@@ -213,11 +264,14 @@ pub(crate) fn keep<'a>(names: &Names, en: &'a str, it: &str) -> Vec<&'a str> {
     out
 }
 
-/// The text, if the whole of `en` is a name or a term ("Boons"): it stays as it is.
+/// The text, if the whole of `en` is a name or a term ("Boons"): it stays as it is; a stat
+/// prefix alone ("Berserker's") is the prefix as the Italian keeps it ("Berserker").
 fn whole(names: &Names, en: &str) -> Option<String> {
     let en = en.trim();
     let term = names::TERMS.iter().any(|(_, forms)| forms.iter().any(|f| en.eq_ignore_ascii_case(f)));
-    names.whole(en).or_else(|| term.then(|| en.to_owned()))
+    let bare = en.strip_suffix("'s").or_else(|| en.strip_suffix("’s")).unwrap_or(en);
+    let affix = names.affix(en).filter(|a| *a == bare);
+    names.whole(en).or_else(|| term.then(|| en.to_owned())).or_else(|| affix.map(str::to_owned))
 }
 
 /// Whether every name of `en` that `it` elides into ("l'Elixir B") starts with a vowel: "l'Toss
