@@ -70,7 +70,7 @@ A word[pl:\"...\"] is followed by the form it takes in the plural. In the name o
 Do not change what is correct: not the style, not word choices that are acceptable, not punctuation, apostrophes (’ or ') or quotes, not the same phrase worded otherwise in another text. In a line of a dialogue the speaker is a character you cannot see: keep the gender the translation gave them. If you are not sure something is a mistake, it is not one.
 
 Some English must stay as it is, so that players can talk with players of other languages:
-- \"keep\": names of skills, traits, specializations, professions, legendary items, boons and conditions. \
+- \"keep\": names of skills, traits, specializations, professions, legendary items, runes, sigils, relics, stat prefixes, boons and conditions. \
 Each must be in the Italian exactly as written in the English; fix only the words right around it \
 (\"l'Elisir B\" becomes \"l'Elixir B\").
 - The lowercase words in \"keep\" are words of the game's mechanics: \"boon\" (benedizione, vantaggio) and \
@@ -81,7 +81,7 @@ The attributes \"Condition Damage\", \"Condition Duration\" and \"Boon Duration\
 If in a text such a word is not the mechanic or the weapon (\"your help was a great boon\", \"focus your mind\"), leave it translated and \
 add \"mechanic\": false.
 - \"glossary\": how these English words are translated; use these Italian forms.
-\"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". Nothing else goes back to English: boons and conditions written in lowercase in the English (\"inflict bleeding\", \"grant might\") stay translated, and so do other attributes (Precisione, Vitalità), skill types and labels \
+\"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: English loanwords, the same in the plural (\"la rune\", \"i sigil\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\". A stat prefix in \"keep\" (\"Berserker\", \"Carrion\") stays in English without the \"'s\", after the Italian noun, with no article or preposition (\"Insegna in seta Berserker\", never \"del Berserker\"). Nothing else goes back to English: boons and conditions written in lowercase in the English (\"inflict bleeding\", \"grant might\") stay translated, and so do other attributes (Precisione, Vitalità), skill types and labels \
 (\"Incantesimo minore.\") stay in Italian. Keep every %token%, every <tag>, every [tag] and every line \
 break exactly as they are. \"%%\" is the percent sign (\"25%%\"): never write a single \"%\", the game cuts the text there.
 
@@ -148,7 +148,7 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool) 
         return Some("a name is missing");
     }
     if mechanic && !names::terms_missing(en, new).is_empty() {
-        return Some("boon, condition or focus is missing");
+        return Some("a term (boon, condition, focus, rune...) is missing");
     }
     if names::term_elided(new) || !elided_well(names, en, new) {
         return Some("a name is elided");
