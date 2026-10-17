@@ -78,10 +78,10 @@ Each must be in the Italian exactly as written in the English; fix only the word
 in the plural (\"i boon\", \"le condition\"; \"boon\" is masculine, \"condition\" feminine), it is lowercase \
 in a sentence and capitalised in a title or label, and it is never elided (\"il boon\", never \"l'boon\"). \
 The attributes \"Condition Damage\", \"Condition Duration\" and \"Boon Duration\" stay whole in English. \
-If in a text such a word is not the mechanic or the weapon (\"your help was a great boon\", \"focus your mind\"), leave it translated and \
+If in a text such a word is not the mechanic, the weapon or the attribute (\"your help was a great boon\", \"focus your mind\", \"the power of the gods\"), leave it translated and \
 add \"mechanic\": false.
 - \"glossary\": how these English words are translated; use these Italian forms.
-\"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: English loanwords, the same in the plural (\"la rune\", \"i sigil\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\". A stat prefix in \"keep\" (\"Berserker\", \"Carrion\") stays in English without the \"'s\", after the Italian noun, with no article or preposition (\"Insegna in seta Berserker\", never \"del Berserker\"). Nothing else goes back to English: boons and conditions written in lowercase in the English (\"inflict bleeding\", \"grant might\") stay translated, and so do other attributes (Precisione, Vitalità), skill types and labels \
+\"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: English loanwords, the same in the plural (\"la rune\", \"i sigil\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\". A stat prefix in \"keep\" (\"Berserker\", \"Carrion\") stays in English without the \"'s\", after the Italian noun, with no article or preposition (\"Insegna in seta Berserker\", never \"del Berserker\"). Nothing else goes back to English: boons and conditions written in lowercase in the English (\"inflict bleeding\", \"grant might\") stay translated (\"grant might\" is \"conferisci potenza\"). The attributes in \"keep\" (Power, Precision, Toughness, Vitality, Ferocity, Healing Power, Concentration, Expertise, Agony Resistance) stay in English, capitalised, never elided (\"+100 Power\", \"in base al tuo Power\"). Skill types and labels \
 (\"Incantesimo minore.\") stay in Italian. Keep every %token%, every <tag>, every [tag] and every line \
 break exactly as they are. \"%%\" is the percent sign (\"25%%\"): never write a single \"%\", the game cuts the text there.
 
@@ -318,7 +318,7 @@ mod tests {
                (1, 'a', 'Maximum Boon Scaling', 'Scala massima del Boon', 'auto', 'x', 0, 1, 1),
                (2, 'a', 'Maximum Boon Scaling', 'Scala massima del Boon', 'auto', 'x', 0, 2, 0),
                (3, 'b', 'You gain Might.', 'Ottieni Might.', 'auto', 'x', 0, 3, 1),
-               (4, 'c', 'Gain 5 Precision.', 'Ottieni 5 Precisione.', 'auto', 'x', 0, 4, 1),
+               (4, 'c', 'Gain 5 Armor.', 'Ottieni 5 Armatura.', 'auto', 'x', 0, 4, 1),
                (5, 'a', 'Maximum Boon Scaling', 'Boon massimi', 'manual', 'x', 0, 5, 3);",
         )
         .unwrap();
@@ -333,9 +333,9 @@ mod tests {
     fn a_mistake_is_fixed_on_every_machine_row_of_the_text_once() {
         let con = db();
         let model = |_: &str, user: &str| -> Result<Value, String> {
-            assert!(user.contains("Scala massima") && user.contains("Ottieni Might") && user.contains("Precisione"), "{user}");
+            assert!(user.contains("Scala massima") && user.contains("Ottieni Might") && user.contains("Armatura"), "{user}");
             Ok(json!({"texts": [
-                {"n": 0, "it": "5 Precision ottenuti.", "why": "x", "kind": "meaning"},
+                {"n": 0, "it": "5 Armor ottenuti.", "why": "x", "kind": "meaning"},
                 {"n": 1, "ok": true},
                 {"n": 2, "it": "Boon massimi conteggiati", "why": "scaling non è scala", "kind": "meaning"},
             ]}))
@@ -346,7 +346,7 @@ mod tests {
         assert_eq!(it(&con, 2), "Boon massimi conteggiati");
         // The hand correction stays; English brought back is refused.
         assert_eq!(it(&con, 5), "Boon massimi");
-        assert_eq!(it(&con, 4), "Ottieni 5 Precisione.");
+        assert_eq!(it(&con, 4), "Ottieni 5 Armatura.");
         let seqs: i64 = con.query_row("SELECT count(DISTINCT seq) FROM translations", [], |r| r.get(0)).unwrap();
         assert_eq!(seqs, 5);
         // Nothing is asked again.
