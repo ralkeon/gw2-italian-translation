@@ -78,10 +78,10 @@ Each must be in the Italian exactly as written in the English; fix only the word
 in the plural (\"i boon\", \"le condition\"; \"boon\" is masculine, \"condition\" feminine), it is lowercase \
 in a sentence and capitalised in a title or label, and it is never elided (\"il boon\", never \"l'boon\"). \
 The attributes \"Condition Damage\", \"Condition Duration\" and \"Boon Duration\" stay whole in English. \
-If in a text such a word is not the mechanic (\"your help was a great boon\"), leave it translated and \
+If in a text such a word is not the mechanic or the weapon (\"your help was a great boon\", \"focus your mind\"), leave it translated and \
 add \"mechanic\": false.
 - \"glossary\": how these English words are translated; use these Italian forms.
-\"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. Nothing else goes back to English: boons and conditions written in lowercase in the English (\"inflict bleeding\", \"grant might\") stay translated, and so do other attributes (Precisione, Vitalità), skill types and labels \
+\"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". Nothing else goes back to English: boons and conditions written in lowercase in the English (\"inflict bleeding\", \"grant might\") stay translated, and so do other attributes (Precisione, Vitalità), skill types and labels \
 (\"Incantesimo minore.\") stay in Italian. Keep every %token%, every <tag>, every [tag] and every line \
 break exactly as they are. \"%%\" is the percent sign (\"25%%\"): never write a single \"%\", the game cuts the text there.
 
@@ -148,7 +148,7 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool) 
         return Some("a name is missing");
     }
     if mechanic && !names::terms_missing(en, new).is_empty() {
-        return Some("boon or condition is missing");
+        return Some("boon, condition or focus is missing");
     }
     if names::term_elided(new) || !elided_well(names, en, new) {
         return Some("a name is elided");

@@ -255,9 +255,14 @@ impl Names {
 
 /// Words of the game's mechanics that stay in English too, in any case and in sentences, with the
 /// forms they take: Italian players say "boon" and "condi", "benedizione" is no game word.
-/// "Black Lion", the company, too: players say "forziere Black Lion", never "Leone Nero".
-pub const TERMS: &[(&str, &[&str])] =
-    &[("boon", &["boon", "boons"]), ("condition", &["condition", "conditions"]), ("Black Lion", &["black lion"])];
+/// "Black Lion", the company, too: players say "forziere Black Lion", never "Leone Nero". And
+/// "focus", the off-hand weapon: "focalizzatore" and "concentrazione" are no game words.
+pub const TERMS: &[(&str, &[&str])] = &[
+    ("boon", &["boon", "boons"]),
+    ("condition", &["condition", "conditions"]),
+    ("Black Lion", &["black lion"]),
+    ("focus", &["focus", "foci"]),
+];
 
 /// Whether `s` has one of `forms` (one word or more, in a row) as words, in any case.
 fn has_word(s: &str, forms: &[&str]) -> bool {
@@ -339,6 +344,9 @@ mod tests {
         assert!(terms_missing("A black cat and a lion.", "Un gatto nero e un leone.").is_empty());
         assert!(term_elided("Statuetta dell'Black Lion"));
         assert!(!term_elided("Rimuove il boon"));
+        assert_eq!(terms_missing("Spindrift Focus", "Focalizzatore Spindrift"), ["focus"]);
+        assert!(terms_missing("Spindrift Focus", "Focus Spindrift").is_empty());
+        assert!(terms_missing("Focused Strikes", "Colpi concentrati").is_empty());
     }
 
     fn names() -> Names {
