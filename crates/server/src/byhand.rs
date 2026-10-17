@@ -6,13 +6,18 @@
 //! so nothing is written (run it with --dry-run, or the texts are counted as given today).
 //! `--answers <file>`: the same lines, each with "answer": what the model would answer for that
 //! text ({"ok": true} or {"it", "why", "kind"...}, no "n"). The job runs as with a model, with the
-//! same checks: a text with no line in the file gets no answer and stays for later.
+//! checks that keep the text working in the game (markup, plural marks), not the ones that judge
+//! the meaning (names, terms, English, glossary): that judgment is the person's. A text with no line
+//! in the file gets no answer and stays for later.
 
 use std::{collections::HashMap, fs, io::Write};
 
 use serde_json::{Value, json};
 
 use crate::names::Ask;
+
+/// Set on the answer by `answers` only (main.rs takes it off a model's): answered by hand.
+pub const FLAG: &str = "by_hand";
 
 fn texts(user: &str) -> Vec<Value> {
     serde_json::from_str::<Value>(user).ok().and_then(|v| v["texts"].as_array().cloned()).unwrap_or_default()
@@ -55,7 +60,7 @@ pub fn answers(file: &str) -> std::io::Result<Box<Ask<'static>>> {
                 Some(a)
             })
             .collect();
-        Ok(json!({ "texts": answered }))
+        Ok(json!({ "texts": answered, FLAG: true }))
     }))
 }
 
@@ -78,7 +83,7 @@ mod tests {
         // Another order and other numbers: by English and Italian, the one with no answer left out.
         let user = json!({"texts": [{"n": 0, "en": "B", "it": "b"}, {"n": 1, "en": "A", "it": "a"}]}).to_string();
         let ask = answers(answered.to_str().unwrap()).unwrap();
-        assert_eq!(ask("s", &user).unwrap(), json!({"texts": [{"ok": true, "n": 0}]}));
+        assert_eq!(ask("s", &user).unwrap(), json!({"texts": [{"ok": true, "n": 0}], FLAG: true}));
         fs::remove_dir_all(&dir).unwrap();
     }
 }

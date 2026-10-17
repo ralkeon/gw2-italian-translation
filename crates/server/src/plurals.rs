@@ -7,7 +7,8 @@
 //! translations only (hand corrections are never touched). For each the model answers the Italian in
 //! the singular, with `[pl:"..."]` after every word that changes in the plural; or that it is right.
 //! The answer is checked like the review's: the same text once the marks are taken off, nothing but
-//! the number may change in what the checks (markup, names, terms, glossary) look at.
+//! the number may change in what the checks (markup, names, terms, glossary) look at. Answered by
+//! hand (byhand.rs) only the marks and the markup are checked, the rest is the person's judgment.
 //! A text (English and Italian) is asked once: `plural_reviewed`. Every rewrite goes into `history`
 //! and `plural_log`, and to the addons with /sync.
 
@@ -134,11 +135,16 @@ pub fn pending(con: &Connection, max: usize) -> rusqlite::Result<Vec<Text>> {
     stmt.query_map([max as i64], |r| Ok(Text { hash: r.get(0)?, en: r.get(1)?, it: r.get(2)? }))?.collect()
 }
 
-/// Why the model's `new` for `text` cannot be used, if it cannot.
-fn check(names: &Names, terms: &[Term], text: &Text, new: &str) -> Option<&'static str> {
+/// Why the model's `new` for `text` cannot be used, if it cannot. By hand, only what would break
+/// the text in the game.
+fn check(names: &Names, terms: &[Term], text: &Text, new: &str, by_hand: bool) -> Option<&'static str> {
     let en = text.en.as_str();
     if new.trim().is_empty() || new.chars().count() > TEXT_MAX || !marks_ok(new) {
         return Some("empty, too long or bad marks");
+    }
+    if by_hand {
+        let broken = !markup::token_mismatch(en, new).is_empty() || markup::stray_percent(new) || markup::wrap_broken(en, new);
+        return broken.then_some("markup changed");
     }
     // A mark after a preposition needs one before it: the head noun changes too (it has an adjective
     // that agrees), otherwise it is the complement ("Skin per scudo") that was marked.
@@ -178,6 +184,7 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str) -> Option<&'stat
 pub fn ask(ask: &Ask, names: &Names, terms: &[Term], texts: &[Text]) -> Result<Vec<Option<Verdict>>, String> {
     let list: Vec<Value> = texts.iter().enumerate().map(|(n, t)| json!({ "n": n, "en": t.en, "it": t.it })).collect();
     let answer = ask(SYSTEM, &json!({ "texts": list }).to_string())?;
+    let by_hand = answer[crate::byhand::FLAG] == true;
     let mut out: Vec<Option<Verdict>> = texts.iter().map(|_| None).collect();
     for a in answer["texts"].as_array().map(Vec::as_slice).unwrap_or_default() {
         let Some(n) = a["n"].as_u64().map(|n| n as usize).filter(|&n| n < texts.len()) else { continue };
@@ -185,7 +192,7 @@ pub fn ask(ask: &Ask, names: &Names, terms: &[Term], texts: &[Text]) -> Result<V
         out[n] = Some(match a["it"].as_str().filter(|it| *it != text.it) {
             None if a["ok"] == true || a["it"].is_string() => Verdict::Ok,
             None => continue,
-            Some(new) => match check(names, terms, text, new) {
+            Some(new) => match check(names, terms, text, new, by_hand) {
                 None => Verdict::Fixed { it: new.to_owned(), why: a["why"].as_str().unwrap_or("").chars().take(300).collect() },
                 Some(why) => Verdict::Refused(format!("{why}: {new:?}")),
             },

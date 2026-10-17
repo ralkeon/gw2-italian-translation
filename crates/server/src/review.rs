@@ -11,6 +11,8 @@
 //!
 //! What it answers is checked as the names job checks its own (markup, names, terms, no English
 //! word brought back but those); a text that fails stays as it is, and the nightly jobs try again.
+//! Answered by hand (byhand.rs) only the markup is checked: there the judgment of the meaning is
+//! the person's, a name or a term that is a plain word in that sentence is theirs to tell.
 //! A text (English and Italian) is reviewed once: `reviewed`. Every rewrite goes into `history`
 //! and `review_log` with the model's reason, and to the addons with /sync. Hand corrections are
 //! never touched.
@@ -138,11 +140,16 @@ pub fn pending(con: &Connection, max: usize) -> rusqlite::Result<Vec<Text>> {
     stmt.query_map([max as i64], |r| Ok(Text { hash: r.get(0)?, en: r.get(1)?, it: r.get(2)? }))?.collect()
 }
 
-/// Why the model's `new` for `text` cannot be used, if it cannot.
-fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool) -> Option<&'static str> {
+/// Why the model's `new` for `text` cannot be used, if it cannot. By hand, only what would break
+/// the text in the game.
+fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool, by_hand: bool) -> Option<&'static str> {
     let (en, old) = (text.en.as_str(), text.it.as_str());
     if new.trim().is_empty() || new.chars().count() > TEXT_MAX {
         return Some("empty or too long");
+    }
+    if by_hand {
+        let broken = !markup::token_mismatch(en, new).is_empty() || markup::stray_percent(new) || markup::wrap_broken(en, new);
+        return broken.then_some("markup changed");
     }
     if !names.missing(en, new).is_empty() {
         return Some("a name is missing");
@@ -184,6 +191,7 @@ pub fn ask(ask: &Ask, names: &Names, terms: &[Term], texts: &[Text]) -> Result<V
         })
         .collect();
     let answer = ask(SYSTEM, &json!({ "texts": list }).to_string())?;
+    let by_hand = answer[crate::byhand::FLAG] == true;
     let mut out: Vec<Option<Verdict>> = texts.iter().map(|_| None).collect();
     for a in answer["texts"].as_array().map(Vec::as_slice).unwrap_or_default() {
         let Some(n) = a["n"].as_u64().map(|n| n as usize).filter(|&n| n < texts.len()) else { continue };
@@ -191,7 +199,7 @@ pub fn ask(ask: &Ask, names: &Names, terms: &[Term], texts: &[Text]) -> Result<V
         let mechanic = a["mechanic"] != false;
         // Right as it is, but only if nothing is missing.
         let new = a["it"].as_str().filter(|it| *it != text.it);
-        let right = |text: &Text| match check(names, terms, text, &text.it, mechanic) {
+        let right = |text: &Text| match check(names, terms, text, &text.it, mechanic, by_hand) {
             None => Verdict::Ok,
             Some(why) => Verdict::Refused(format!("ok, but {why}")),
         };
@@ -200,7 +208,7 @@ pub fn ask(ask: &Ask, names: &Names, terms: &[Term], texts: &[Text]) -> Result<V
             None if a["ok"] == true || a["it"].is_string() => right(text),
             Some(_) if !FIXES.contains(&a["kind"].as_str().unwrap_or("")) => right(text),
             None => continue,
-            Some(new) => match check(names, terms, text, new, mechanic) {
+            Some(new) => match check(names, terms, text, new, mechanic, by_hand) {
                 None => Verdict::Fixed { it: new.to_owned(), why: a["why"].as_str().unwrap_or("").chars().take(300).collect() },
                 Some(why) => Verdict::Refused(format!("{why}: {new:?}")),
             },
@@ -386,5 +394,24 @@ mod tests {
         let report = run(&con, &model, 100, true).unwrap();
         assert_eq!((report.refused, report.rows), (1, 0));
         assert_eq!(pending(&con, 100).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn by_hand_the_meaning_is_the_persons_only_the_markup_is_checked() {
+        let con = db();
+        con.execute("UPDATE translations SET it = 'Ottieni potenza.' WHERE id = 3", []).unwrap();
+        let answer = |texts: Value| json!({"texts": texts, crate::byhand::FLAG: true});
+        // A name missing, English brought back: the person's judgment, taken.
+        let by_hand = |_: &str, _: &str| -> Result<Value, String> {
+            Ok(answer(json!([
+                {"n": 0, "it": "Armor: 5 ottenuti.", "why": "x", "kind": "meaning"},
+                {"n": 1, "ok": true},
+            ])))
+        };
+        let report = run(&con, &by_hand, 2, true).unwrap();
+        assert_eq!((report.ok, report.fixed, report.refused), (1, 1, 0));
+        // A stray percent still is not.
+        let broken = |_: &str, _: &str| -> Result<Value, String> { Ok(answer(json!([{"n": 0, "it": "Ottieni 5% Armatura.", "why": "x", "kind": "meaning"}]))) };
+        assert_eq!(run(&con, &broken, 1, true).unwrap().refused, 1);
     }
 }

@@ -372,7 +372,14 @@ fn model(options: &mut HashMap<String, String>) -> Box<names::Ask<'static>> {
         (None, None, Some(file)) => {
             let mut chain = Chain::default();
             chain.set(translators(&file));
-            return Box::new(move |system: &str, user: &str| chain.ask(system, user).map_err(|e| e.to_string()));
+            // Never by hand: a model cannot skip the checks.
+            return Box::new(move |system: &str, user: &str| {
+                let mut answer = chain.ask(system, user).map_err(|e| e.to_string())?;
+                if let Some(o) = answer.as_object_mut() {
+                    o.remove(byhand::FLAG);
+                }
+                Ok(answer)
+            });
         }
         _ => {
             eprintln!("{USAGE}");
