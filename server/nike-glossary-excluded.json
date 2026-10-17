@@ -1,0 +1,17 @@
+{
+  "_comment": "Termini del glossario di Nike (glossary_it.json) che NON importiamo in english_names, con il motivo. Le classi 'possessivo' e 'minuscolo' sono automatiche (vedi crates/server/src/nike.rs). Chi vuole rimettere un termine lo toglie da qui.",
+  "classes": [
+    {
+      "reason": "Parola inglese comune, non un nome: ha una resa italiana normale e un termine del glossario la imporrebbe in inglese in qualunque frase, anche dove non è il nome di niente (es. Bolt of Jute = rotolo di iuta, Ooze = melma, Shaman = sciamano).",
+      "terms": ["Bolt", "Ooze", "Oozes", "Skiff", "Skiffs", "Shaman", "Eternity", "Eureka", "Quip", "Scruffy", "Bubbles", "Revealed", "Risen", "Grieving", "Sunrise", "Twilight", "Nevermore", "Forsaken", "Luminary", "Conduit", "Evoker", "Bringer", "Giver", "Branded", "Awakened", "Titans", "Destroyers", "Devourer", "Devourers"]
+    },
+    {
+      "reason": "Creatura mitologica o animale con un nome italiano consolidato (centauro, arpia, drago, gigante). Non è un nome inventato dal gioco come Skritt o Quaggan: nell'uso comune ha già la sua forma italiana. I nomi delle cavalcature (Griffon, Raptor, Jackal, Springer, Skimmer, Skyscale, Warclaw) restano nel glossario perché sono nomi ufficiali del gioco.",
+      "terms": ["Centaur", "Centaurs", "Harpy", "Harpies", "Drake", "Drakes", "Ettin", "Ettins"]
+    },
+    {
+      "reason": "Voce di traduzione che non regge: un plurale reso con un singolare (inscriptions = inscription, insignias = insignia) o un singolare reso con un plurale (legging = gambali), o una parola comune isolata (chicken = pollo) che il glossario imporrebbe in ogni frase.",
+      "terms": ["Inscriptions", "inscriptions", "Insignias", "insignias", "Legging", "legging", "Chicken", "chicken"]
+    }
+  ]
+}

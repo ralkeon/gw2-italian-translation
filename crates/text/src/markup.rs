@@ -93,6 +93,23 @@ pub fn token_mismatch(en: &str, it: &str) -> Vec<String> {
     want.into_iter().map(|t| format!("-{t}")).chain(extra).collect()
 }
 
+/// `text` without its grammar marks (`[s]`, `[pl:"..."]`, `[f:"..."]`, `[m:"..."]`): the English as a
+/// name is written, whatever number or gender the game puts it in.
+pub fn strip_grammar(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        match token_len(rest) {
+            Some(len) if is_grammar(&rest[..len]) => rest = &rest[len..],
+            _ => {
+                out.push(c);
+                rest = &rest[c.len_utf8()..];
+            }
+        }
+    }
+    out
+}
+
 /// `en` as `opens + body + closes`, when it is a name or a sentence wrapped in tokens
 /// (`%str1%%str2%Seer Pants%str3%%str4%`, `<c=#ccbb66>Eternal Forgemaster</c>`): the body has no
 /// token of its own (grammar marks apart) and both ends have at least one.
@@ -388,6 +405,12 @@ mod tests {
         // Nothing stray, or a number that is not there: as it is.
         assert_eq!(fix_percent("10%% more", "10%% in più"), "10%% in più");
         assert_eq!(fix_percent("10%% more", "dieci % in più"), "dieci % in più");
+    }
+
+    #[test]
+    fn grammar_marks_stripped() {
+        assert_eq!(strip_grammar("Silver Ingot[s]"), "Silver Ingot");
+        assert_eq!(strip_grammar("Mini[pl:\"Minis of\"] Zuzu %str1%"), "Mini Zuzu %str1%");
     }
 
     #[test]

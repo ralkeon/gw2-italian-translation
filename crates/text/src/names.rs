@@ -177,10 +177,16 @@ impl Names {
     }
 
     /// The name the whole of `en` is, if it is one (spaces around it apart).
-    pub fn whole<'a>(&'a self, en: &str) -> Option<&'a str> {
+    ///
+    /// A name that is also marked for the plural ("Silver Ingot[s]") is the whole text too: it
+    /// stays as it is, marks included, so that the game still has its plural.
+    pub fn whole(&self, en: &str) -> Option<String> {
         let en = en.trim();
-        let first = words(en).into_iter().next()?;
-        self.by_first.get(first.text)?.iter().find(|n| *n == en).map(String::as_str)
+        let bare = crate::markup::strip_grammar(en);
+        let bare = bare.trim();
+        let first = words(bare).into_iter().next()?;
+        let name = self.by_first.get(first.text)?.iter().find(|n| *n == bare)?;
+        Some(if bare == en { name.clone() } else { en.to_owned() })
     }
 
     /// The names in `s` (plain English or the XML of markup.rs) to keep, as byte ranges, in order,
@@ -349,9 +355,10 @@ mod tests {
     #[test]
     fn the_whole_text() {
         let n = names();
-        assert_eq!(n.whole("Signet of Rage"), Some("Signet of Rage"));
-        assert_eq!(n.whole(" Firebrand "), Some("Firebrand"));
-        assert_eq!(n.whole("Might"), Some("Might"));
+        assert_eq!(n.whole("Signet of Rage").as_deref(), Some("Signet of Rage"));
+        assert_eq!(n.whole(" Firebrand ").as_deref(), Some("Firebrand"));
+        assert_eq!(n.whole("Might").as_deref(), Some("Might"));
+        assert_eq!(n.whole("Signet of Rage[s]").as_deref(), Some("Signet of Rage[s]"));
         assert_eq!(n.whole("Signet of Rage Recharge"), None);
         // A plain word is not a name, even alone.
         assert_eq!(n.whole("Fire"), None);

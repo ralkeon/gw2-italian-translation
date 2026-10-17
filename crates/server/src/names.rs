@@ -217,7 +217,7 @@ pub(crate) fn keep<'a>(names: &Names, en: &'a str, it: &str) -> Vec<&'a str> {
 fn whole(names: &Names, en: &str) -> Option<String> {
     let en = en.trim();
     let term = names::TERMS.iter().any(|(_, forms)| forms.iter().any(|f| en.eq_ignore_ascii_case(f)));
-    names.whole(en).map(str::to_owned).or_else(|| term.then(|| en.to_owned()))
+    names.whole(en).or_else(|| term.then(|| en.to_owned()))
 }
 
 /// Whether every name of `en` that `it` elides into ("l'Elixir B") starts with a vowel: "l'Toss

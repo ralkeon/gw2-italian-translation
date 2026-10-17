@@ -244,7 +244,7 @@ pub fn load_names(con: &Connection) -> rusqlite::Result<()> {
 
 /// The name that stays in English the whole of `en` is, if it is one.
 pub fn english_name(en: &str) -> Option<String> {
-    NAMES.lock().ok()?.as_ref()?.whole(en).map(str::to_owned)
+    NAMES.lock().ok()?.as_ref()?.whole(en)
 }
 
 /// The glossary as it is now.
