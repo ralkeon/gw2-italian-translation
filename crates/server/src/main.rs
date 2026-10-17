@@ -14,6 +14,7 @@
 //! gw2it-server repair [--db gw2it.db] [--dry-run]   (the `%` a translator added, in every row)
 //! gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
 //!                                                                         (see review.rs)
+//! gw2it-server review|plurals ... --ask-to <file> | --answers <file>   (no model: by hand, see byhand.rs)
 
 use std::{
     collections::HashMap,
@@ -34,6 +35,7 @@ mod consistency;
 mod glossary;
 mod names;
 mod nike;
+mod byhand;
 mod plurals;
 mod priority;
 mod replicate;
@@ -100,6 +102,7 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts 300] [--dry-run]
        gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
        gw2it-server plurals [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
+       gw2it-server review|plurals [--db gw2it.db] (--ask-to <file> | --answers <file>) [--max-texts 200] [--dry-run]
        gw2it-server nike-glossary --file glossary_it.json [--excluded nike-glossary-excluded.json] [--db gw2it.db] [--dry-run]
        gw2it-server repair [--db gw2it.db] [--dry-run]";
 
@@ -123,7 +126,7 @@ fn main() {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts" | "--review-daily" | "--file" | "--excluded"), Some(v)) => {
+            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts" | "--review-daily" | "--file" | "--excluded" | "--ask-to" | "--answers"), Some(v)) => {
                 options.insert(name.to_owned(), v);
             }
             _ => {
@@ -190,21 +193,13 @@ fn main() {
         return;
     }
     if plurals {
-        let Some(file) = options.remove("--translators") else {
-            eprintln!("{USAGE}");
-            std::process::exit(2);
-        };
         let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(200);
-        run_plurals(&db, &file, max_texts, dry_run);
+        run_plurals(&db, &*model(&mut options), max_texts, dry_run);
         return;
     }
     if review {
-        let Some(file) = options.remove("--translators") else {
-            eprintln!("{USAGE}");
-            std::process::exit(2);
-        };
         let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(200);
-        run_review(&db, &file, max_texts, dry_run);
+        run_review(&db, &*model(&mut options), max_texts, dry_run);
         return;
     }
     let listen = options.remove("--listen").unwrap_or_else(|| "127.0.0.1:8790".into());
@@ -368,16 +363,35 @@ fn run_repair(con: &Connection, dry_run: bool) -> rusqlite::Result<usize> {
     Ok(repaired)
 }
 
+/// The model of the review and of the plurals check: the translators' chain, or answers by hand
+/// (byhand.rs) with --ask-to or --answers.
+fn model(options: &mut HashMap<String, String>) -> Box<names::Ask<'static>> {
+    let made = match (options.remove("--ask-to"), options.remove("--answers"), options.remove("--translators")) {
+        (Some(file), None, _) => byhand::ask_to(&file),
+        (None, Some(file), _) => byhand::answers(&file),
+        (None, None, Some(file)) => {
+            let mut chain = Chain::default();
+            chain.set(translators(&file));
+            return Box::new(move |system: &str, user: &str| chain.ask(system, user).map_err(|e| e.to_string()));
+        }
+        _ => {
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        }
+    };
+    made.unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    })
+}
+
 /// The review (review.rs) by hand: up to `max_texts` texts not reviewed yet, the newest first.
-fn run_review(db: &str, translators_file: &str, max_texts: usize, dry_run: bool) {
-    let mut chain = Chain::default();
-    chain.set(translators(translators_file));
+fn run_review(db: &str, ask: &names::Ask, max_texts: usize, dry_run: bool) {
     let con = open(db).unwrap_or_else(|e| {
         eprintln!("cannot open {db}: {e}");
         std::process::exit(1);
     });
-    let ask = |system: &str, user: &str| chain.ask(system, user).map_err(|e| e.to_string());
-    match review::run(&con, &ask, max_texts, dry_run) {
+    match review::run(&con, ask, max_texts, dry_run) {
         Ok(r) => println!(
             "review: {} texts, {} right, {} fixed ({} rows), {} fixes refused{}{}",
             r.asked,
@@ -442,15 +456,12 @@ fn run_nike_glossary(db: &str, file: &str, excluded_file: Option<&str>, dry_run:
 }
 
 /// The plurals check (plurals.rs) by hand or from cron: up to `max_texts` texts not checked yet.
-fn run_plurals(db: &str, translators_file: &str, max_texts: usize, dry_run: bool) {
-    let mut chain = Chain::default();
-    chain.set(translators(translators_file));
+fn run_plurals(db: &str, ask: &names::Ask, max_texts: usize, dry_run: bool) {
     let con = open(db).unwrap_or_else(|e| {
         eprintln!("cannot open {db}: {e}");
         std::process::exit(1);
     });
-    let ask = |system: &str, user: &str| chain.ask(system, user).map_err(|e| e.to_string());
-    match plurals::run(&con, &ask, max_texts, dry_run) {
+    match plurals::run(&con, ask, max_texts, dry_run) {
         Ok(r) => println!(
             "plurals: {} texts, {} right, {} fixed ({} rows), {} fixes refused{}{}",
             r.asked,
