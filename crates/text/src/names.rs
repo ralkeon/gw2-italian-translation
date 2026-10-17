@@ -275,6 +275,12 @@ impl Names {
         {
             out.push(affix);
         }
+        // A name marked for the plural inside ("Superior Rune[s] of the Dragonhunter") is no name
+        // to `find`: the whole text is.
+        let en_whole = en.trim();
+        if out.is_empty() && self.whole(en).is_some_and(|w| w == en_whole && w != crate::markup::strip_grammar(en_whole)) && it.trim() != en_whole {
+            out.push(en_whole);
+        }
         out
     }
 }
@@ -300,7 +306,8 @@ fn strip_tokens(s: &str) -> &str {
 /// forms they take: Italian players say "boon" and "condi", "benedizione" is no game word.
 /// "Black Lion", the company, too: players say "forziere Black Lion", never "Leone Nero". And
 /// "focus", the off-hand weapon: "focalizzatore" and "concentrazione" are no game words. And the
-/// upgrades "rune", "sigil" and "relic", the words of the wiki, the builds and the Trading Post.
+/// upgrades "rune", "sigil" and "relic", the words of the wiki, the builds and the Trading Post,
+/// and the attributes ("+100 Power"): "potenza" was the boon Might too.
 pub const TERMS: &[(&str, &[&str])] = &[
     ("boon", &["boon", "boons"]),
     ("condition", &["condition", "conditions"]),
@@ -309,6 +316,15 @@ pub const TERMS: &[(&str, &[&str])] = &[
     ("rune", &["rune", "runes"]),
     ("sigil", &["sigil", "sigils"]),
     ("relic", &["relic", "relics"]),
+    ("Power", &["power"]),
+    ("Precision", &["precision"]),
+    ("Toughness", &["toughness"]),
+    ("Vitality", &["vitality"]),
+    ("Ferocity", &["ferocity"]),
+    ("Healing Power", &["healing power"]),
+    ("Concentration", &["concentration"]),
+    ("Expertise", &["expertise"]),
+    ("Agony Resistance", &["agony resistance"]),
 ];
 
 /// Whether `s` has one of `forms` (one word or more, in a row) as words, in any case.
@@ -338,8 +354,8 @@ pub fn term_elided(it: &str) -> bool {
 pub const TERM_ATTRIBUTES: &[&str] = &["Condition Damage", "Condition Duration", "Boon Duration", "Black Lion Trading Company"];
 
 /// The words of the English `en` that a rewrite `new` of the Italian `old` brought in while not
-/// part of `keep` (the names and terms to put back) nor of `TERM_ATTRIBUTES`: "+5 Precisione"
-/// become "+5 Precision" is a word translated back, not a name put back.
+/// part of `keep` (the names and terms to put back) nor of `TERM_ATTRIBUTES`: "+5 Armatura"
+/// become "+5 Armor" is a word translated back, not a name put back.
 pub fn english_brought_in<'a>(en: &str, old: &str, new: &'a str, keep: &[&str]) -> Vec<&'a str> {
     let lower = |s: &str| words(s).iter().map(|w| w.text.to_lowercase()).collect::<std::collections::HashSet<_>>();
     let (en, old) = (lower(en), lower(old));
@@ -368,9 +384,9 @@ mod tests {
 
     #[test]
     fn only_the_names_come_back_in_english() {
-        let en = "+7 Condition Damage\n+5 Precision";
-        assert_eq!(english_brought_in(en, "+7 Danni da condizione +5 Precisione", "+7 Condition Damage\n+5 Precision", &["condition"]), ["Precision"]);
-        assert!(english_brought_in(en, "+7 Danni da condizione +5 Precisione", "+7 Condition Damage +5 Precisione", &["condition"]).is_empty());
+        let en = "+7 Condition Damage\n+5 Armor";
+        assert_eq!(english_brought_in(en, "+7 Danni da condizione +5 Armatura", "+7 Condition Damage\n+5 Armor", &["condition"]), ["Armor"]);
+        assert!(english_brought_in(en, "+7 Danni da condizione +5 Armatura", "+7 Condition Damage +5 Armatura", &["condition"]).is_empty());
         let en = "<c=@abilitytype>Cantrip.</c> Gain a barrier for each boon.";
         let old = "<c=@abilitytype>Incantesimo minore.</c> Ottieni una barriera per ogni benedizione.";
         assert_eq!(english_brought_in(en, old, "<c=@abilitytype>Cantrip.</c> Ottieni una barriera per ogni boon.", &["boon"]), ["Cantrip"]);
@@ -474,6 +490,14 @@ mod tests {
     }
 
     #[test]
+    fn attributes_are_terms() {
+        assert_eq!(terms_missing("+100 Power\n+70 Precision", "+100 Potenza\n+70 Precisione"), ["Power", "Precision"]);
+        assert!(terms_missing("+100 Healing Power", "+100 Healing Power").is_empty());
+        assert_eq!(terms_missing("Gain ferocity based on your power.", "Ottieni ferocia in base al tuo Power."), ["Ferocity"]);
+        assert!(term_elided("Aumenta l'Expertise"));
+    }
+
+    #[test]
     fn upgrades_are_terms() {
         assert_eq!(terms_missing("Equip a sigil.", "Equipaggia un sigillo."), ["sigil"]);
         assert!(terms_missing("Salvage the runes.", "Ricicla le rune.").is_empty());
@@ -486,5 +510,9 @@ mod tests {
         assert_eq!(n.missing("Signet of Rage", "Sigillo della rabbia"), ["Signet of Rage"]);
         assert!(n.missing("Signet of Rage", "Signet of Rage").is_empty());
         assert_eq!(n.missing("You grant Quickness and Might.", "Conferisci Quickness e Potenza."), ["Might"]);
+        let n = Names::new(["Superior Rune of the Dragonhunter"]);
+        let en = "Superior Rune[s] of the Dragonhunter";
+        assert_eq!(n.missing(en, "Runa[pl:\"Rune\"] superiore[pl:\"superiori\"] del Cacciatore di Draghi"), [en]);
+        assert!(n.missing(en, en).is_empty());
     }
 }
