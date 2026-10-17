@@ -35,6 +35,7 @@ mod glossary;
 mod names;
 mod nike;
 mod plurals;
+mod priority;
 mod replicate;
 mod review;
 mod sign;

@@ -382,12 +382,15 @@ fn settle(
             // Only if it is still what the model saw, and still a machine translation (unless
             // `include_manual`: a hand correction stays one, with its author and trust).
             let changed = con.execute(
-                "UPDATE translations SET it = ?3, at = ?5,
-                     status = CASE WHEN trust >= 2 THEN status ELSE 'auto' END,
-                     author = CASE WHEN trust >= 2 THEN author ELSE ?4 END,
-                     trust = CASE WHEN trust >= 2 THEN trust ELSE 1 END,
-                     seq = (SELECT coalesce(max(seq), 0) FROM translations) + 1
-                 WHERE id = ?1 AND hash = ?2 AND it = ?6 AND (trust <= 1 OR ?7)",
+                &format!(
+                    "UPDATE translations SET it = ?3, at = ?5,
+                         status = CASE WHEN trust >= 2 THEN status ELSE 'auto' END,
+                         author = CASE WHEN trust >= 2 THEN author ELSE ?4 END,
+                         trust = CASE WHEN trust >= 2 THEN trust ELSE 1 END,
+                         seq = (SELECT coalesce(max(seq), 0) FROM translations) + 1
+                     WHERE id = ?1 AND hash = ?2 AND it = ?6 AND (trust <= 1 OR ?7) AND author NOT IN ({})",
+                    crate::priority::ABOVE_CONSISTENCY
+                ),
                 params![entry.id, entry.hash, markup::straight_quotes(new), AUTHOR, now, entry.it, all],
             )?;
             if changed > 0 {

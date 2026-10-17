@@ -127,12 +127,14 @@ pub fn used_today(con: &Connection) -> rusqlite::Result<usize> {
 
 /// Up to `max` machine translations not reviewed yet, the newest first, one per text.
 pub fn pending(con: &Connection, max: usize) -> rusqlite::Result<Vec<Text>> {
-    let mut stmt = con.prepare_cached(
+    // Not the rows of the jobs above the review (priority.rs): they would not be rewritten anyway.
+    let mut stmt = con.prepare_cached(&format!(
         "SELECT t.hash, t.en, t.it FROM translations t
-         WHERE t.trust <= 1 AND t.it <> t.en AND trim(t.en) <> ''
+         WHERE t.trust <= 1 AND t.it <> t.en AND trim(t.en) <> '' AND t.author NOT IN ({})
            AND NOT EXISTS (SELECT 1 FROM reviewed r WHERE r.hash = t.hash AND r.it = t.it)
          GROUP BY t.hash, t.en, t.it ORDER BY max(t.seq) DESC LIMIT ?1",
-    )?;
+        crate::priority::ABOVE_REVIEW
+    ))?;
     stmt.query_map([max as i64], |r| Ok(Text { hash: r.get(0)?, en: r.get(1)?, it: r.get(2)? }))?.collect()
 }
 
@@ -223,7 +225,10 @@ pub fn apply(con: &Connection, text: &Text, verdict: &Verdict) -> rusqlite::Resu
         Verdict::Fixed { it, why } => (it, why),
     };
     let ids: Vec<i64> = {
-        let mut stmt = con.prepare_cached("SELECT id FROM translations WHERE hash = ?1 AND en = ?2 AND it = ?3 AND trust <= 1 ORDER BY id")?;
+        let mut stmt = con.prepare_cached(&format!(
+            "SELECT id FROM translations WHERE hash = ?1 AND en = ?2 AND it = ?3 AND trust <= 1 AND author NOT IN ({}) ORDER BY id",
+            crate::priority::ABOVE_REVIEW
+        ))?;
         stmt.query_map(params![text.hash, text.en, text.it], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     for id in &ids {
@@ -348,6 +353,26 @@ mod tests {
         let never = |_: &str, user: &str| -> Result<Value, String> { panic!("asked again: {user}") };
         assert_eq!(run(&con, &never, 100, false).unwrap().asked, 0);
         assert_eq!(used_today(&con).unwrap(), 3);
+    }
+
+    #[test]
+    fn what_a_job_above_wrote_is_not_reviewed_nor_rewritten() {
+        let con = db();
+        con.execute("UPDATE translations SET author = 'names' WHERE id = 3", []).unwrap();
+        // The text of row 3 is not even asked about.
+        let model = |_: &str, user: &str| -> Result<Value, String> {
+            assert!(!user.contains("Ottieni Might"), "{user}");
+            Ok(json!({"texts": []}))
+        };
+        run(&con, &model, 100, false).unwrap();
+        assert_eq!(it(&con, 3), "Ottieni Might.");
+        // And a fix for a text it shares with another row only reaches the rows it may.
+        con.execute("UPDATE translations SET author = 'consistency' WHERE id = 1", []).unwrap();
+        let text = Text { hash: "a".into(), en: "Maximum Boon Scaling".into(), it: "Scala massima del Boon".into() };
+        let fix = Verdict::Fixed { it: "Boon massimi conteggiati".into(), why: "x".into() };
+        assert_eq!(apply(&con, &text, &fix).unwrap(), 1);
+        assert_eq!(it(&con, 1), "Scala massima del Boon");
+        assert_eq!(it(&con, 2), "Boon massimi conteggiati");
     }
 
     #[test]
