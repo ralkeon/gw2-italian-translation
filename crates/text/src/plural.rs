@@ -57,6 +57,48 @@ const APPOSITION: &[&str] = &[
     "tempesta", "drago", "fantasma", "spirito", "mini", "extra", "standard", "premium",
 ];
 
+/// `it` without its `[pl:"..."]` marks: the singular text.
+pub fn singular(it: &str) -> String {
+    let mut out = String::with_capacity(it.len());
+    let mut rest = it;
+    while !rest.is_empty() {
+        if rest.starts_with("[pl:\"")
+            && let Some(end) = rest.find("\"]")
+        {
+            rest = &rest[end + 2..];
+        } else {
+            let c = rest.chars().next().unwrap();
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
+}
+
+/// Every `[pl:"..."]` follows a letter and holds a non-empty word or phrase without quotes or
+/// brackets, and there is none that is not closed.
+pub fn marks_ok(it: &str) -> bool {
+    let mut rest = it;
+    let mut before = None;
+    while !rest.is_empty() {
+        if rest.starts_with("[pl:") {
+            let Some(inner) = rest.strip_prefix("[pl:\"") else { return false };
+            let Some(end) = inner.find("\"]") else { return false };
+            let word = &inner[..end];
+            if word.trim().is_empty() || word.contains(['"', '[', ']', '<', '>', '%']) || !before.is_some_and(char::is_alphabetic) {
+                return false;
+            }
+            rest = &inner[end + 2..];
+            before = Some(']');
+            continue;
+        }
+        let c = rest.chars().next().unwrap();
+        before = Some(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    true
+}
+
 /// `it` (the singular translation of `en`) with the plural marks the game needs. Unchanged if `en`
 /// has no plural mark, has a `%num%`, or `it` already has marks.
 pub fn pluralize(en: &str, it: &str) -> String {

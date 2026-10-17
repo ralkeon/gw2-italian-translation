@@ -358,6 +358,14 @@ const MAP_SCHEMA: &str = "
         src_hash   INTEGER                -- XXH3-64 of the English, as in Text Translator's cache.db
     );
     CREATE INDEX IF NOT EXISTS map.suggestions_key ON suggestions(key, id);
+    -- What the checks (map_check) found: grave = 1 the text is left out (it is NULL in texts), 0 only
+    -- a name that stays in English is missing. For whoever merges the file: nothing here is a text to use.
+    CREATE TABLE IF NOT EXISTS map.problems (
+        key   INTEGER PRIMARY KEY NOT NULL,
+        en    TEXT NOT NULL,
+        it    TEXT,
+        why   TEXT NOT NULL,
+        grave INTEGER NOT NULL);
 ";
 
 /// Rows of map.texts / map.suggestions from strings + translations; `{where}` picks the strings.
@@ -385,6 +393,75 @@ fn map_author() -> String {
     config::contributor().unwrap_or_else(|| "italian_translation".into())
 }
 
+/// Why `it` cannot be handed over as the translation of `en` (the game would show it broken), if it
+/// cannot: markup that is not the English's, a wrapper (`%str1%%str2%`, `<c>`) in the wrong place, a
+/// `%` the game reads as a format, plural marks that are broken.
+fn broken(en: &str, it: &str) -> Option<&'static str> {
+    if !markup::token_mismatch(en, it).is_empty() {
+        return Some("markup differs from the English");
+    }
+    if markup::wrap_broken(en, it) {
+        return Some("tags in the wrong place");
+    }
+    if markup::stray_percent(it) {
+        return Some("stray %");
+    }
+    if !plural::marks_ok(it) {
+        return Some("plural marks broken");
+    }
+    None
+}
+
+/// What map_it.db hands over is clean: a text is repaired in the file where it can be (markup.rs
+/// `repair`: tags in place, % signs, straight quotes), left out (`it` NULL, listed in `problems`)
+/// where it cannot, and listed with its text kept where only a name that stays in English is
+/// missing. The same for the hand corrections (`suggestions`). `only`: one ID, else all.
+fn map_check(con: &Connection, only: Option<u32>) -> rusqlite::Result<usize> {
+    let filter = if only.is_some() { " AND key = ?1" } else { "" };
+    let key_param: Vec<i64> = only.map(|k| vec![i64::from(k)]).unwrap_or_default();
+    let guard = NAMES.lock().ok();
+    let names = guard.as_ref().and_then(|g| g.as_ref());
+    let rows: Vec<(i64, String, String)> = {
+        let mut stmt = con.prepare(&format!("SELECT key, en, it FROM map.texts WHERE it IS NOT NULL{filter}"))?;
+        stmt.query_map(rusqlite::params_from_iter(&key_param), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    con.execute(&format!("DELETE FROM map.problems WHERE 1 = 1{filter}"), rusqlite::params_from_iter(&key_param))?;
+    let mut left_out = 0;
+    for (key, en, it) in rows {
+        let new = markup::repair(&en, &it);
+        if new != it {
+            con.execute("UPDATE map.texts SET it = ?2 WHERE key = ?1", params![key, new])?;
+        }
+        let (why, grave) = match broken(&en, &new) {
+            Some(why) => (Some(why), true),
+            None if names.is_some_and(|n| !n.missing(&en, &new).is_empty()) => (Some("a name that stays in English is missing"), false),
+            None => (None, false),
+        };
+        if let Some(why) = why {
+            if grave {
+                con.execute("UPDATE map.texts SET it = NULL WHERE key = ?1", [key])?;
+                left_out += 1;
+            }
+            con.execute("INSERT OR REPLACE INTO map.problems (key, en, it, why, grave) VALUES (?1, ?2, ?3, ?4, ?5)", params![key, en, it, why, grave])?;
+        }
+    }
+    // The hand corrections: repaired, and dropped if they stay broken.
+    let sugg: Vec<(i64, String, String)> = {
+        let mut stmt = con.prepare(&format!("SELECT id, en_source, suggestion FROM map.suggestions WHERE 1 = 1{filter}"))?;
+        stmt.query_map(rusqlite::params_from_iter(&key_param), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    for (id, en, it) in sugg {
+        let new = markup::repair(&en, &it);
+        if broken(&en, &new).is_some() {
+            con.execute("DELETE FROM map.suggestions WHERE id = ?1", [id])?;
+            left_out += 1;
+        } else if new != it {
+            con.execute("UPDATE map.suggestions SET suggestion = ?2 WHERE id = ?1", params![id, new])?;
+        }
+    }
+    Ok(left_out)
+}
+
 fn open_map(con: &Connection, path: &Path) -> rusqlite::Result<()> {
     con.execute("ATTACH ?1 AS map", [path.to_string_lossy()])?;
     con.execute_batch(MAP_SCHEMA)?;
@@ -393,7 +470,13 @@ fn open_map(con: &Connection, path: &Path) -> rusqlite::Result<()> {
     let filled = con
         .execute(&MAP_TEXTS.replace("{where}", newest), [])
         .and_then(|_| con.execute(&MAP_SUGGESTIONS.replace("{where}", "1"), named_params! {":author": map_author()}))
-        .and_then(|_| con.execute_batch("COMMIT;"));
+        .and_then(|_| map_check(con, None))
+        .and_then(|left_out| {
+            if left_out > 0 {
+                log::warn!("map_it.db: {left_out} texts left out (broken markup): see the table problems");
+            }
+            con.execute_batch("COMMIT;")
+        });
     if filled.is_err() {
         let _ = con.execute_batch("ROLLBACK;");
         return filled;
@@ -422,6 +505,7 @@ fn map_refresh(con: &Connection, id: u32, hash: u64) -> rusqlite::Result<()> {
     con.prepare_cached("DELETE FROM map.suggestions WHERE key = ?1")?.execute([id])?;
     con.prepare_cached(&MAP_SUGGESTIONS.replace("{where}", this))?
         .execute(named_params! {":id": id, ":hash": hash as i64, ":author": map_author()})?;
+    map_check(con, Some(id))?;
     Ok(())
 }
 
@@ -959,6 +1043,49 @@ mod tests {
 
         drop(con);
         assert!(!dir.join("map_it.db-wal").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn map_hands_over_clean_texts_only() {
+        let dir = std::env::temp_dir().join(format!("gw2it-map-clean-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let con = Connection::open(dir.join("strings.db")).unwrap();
+        con.execute_batch(SCHEMA).unwrap();
+        con.execute_batch(
+            "INSERT INTO strings VALUES
+               (1, 1, '%str1%%str2%Seer Pants%str3%%str4%', 1000, 1000, 1),
+               (2, 2, 'Dawn''s Bow', 1000, 1000, 1),
+               (3, 3, '<c=@abilitytype>Dual Attack</c> skills weaken enemies.', 1000, 1000, 1),
+               (4, 4, '66%% Chance', 1000, 1000, 1),
+               (5, 5, 'Mushroom[s]', 1000, 1000, 1);
+             INSERT INTO translations VALUES
+               (1, 1, 'Pantaloni%str3%%str4% %str1%%str2%del Veggente', 'auto', 'deepl', 1),
+               (2, 2, 'Arco dell’Alba', 'auto', 'deepl', 1),
+               (3, 3, 'Le abilità di \"Attacco</c> <c=@abilitytype>doppio\" indeboliscono.', 'auto', 'deepl', 1),
+               (4, 4, '66%% % di probabilità', 'auto', 'deepl', 1),
+               (5, 5, 'Fungo[pl:\"\"]', 'auto', 'deepl', 1);",
+        )
+        .unwrap();
+        open_map(&con, &dir.join("map_it.db")).unwrap();
+        let it = |key: i64| -> Option<String> { con.query_row("SELECT it FROM map.texts WHERE key = ?1", [key], |r| r.get(0)).unwrap() };
+        // Repaired in the file: tags in place, straight quote, % sign.
+        assert_eq!(it(1).as_deref(), Some("%str1%%str2%Pantaloni del Veggente%str3%%str4%"));
+        assert_eq!(it(2).as_deref(), Some("Arco dell'Alba"));
+        assert_eq!(it(4).as_deref(), Some("66%% di probabilità"));
+        // Left out, with the reason: tags that cannot be put right, broken plural marks.
+        assert_eq!(it(3), None);
+        assert_eq!(it(5), None);
+        let why: Vec<(i64, String, i64)> = con
+            .prepare("SELECT key, why, grave FROM map.problems ORDER BY key")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(why, [(3, "tags in the wrong place".into(), 1), (5, "plural marks broken".into(), 1)]);
+        drop(con);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
