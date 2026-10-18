@@ -7,8 +7,9 @@
 //! already translated by a machine.
 //!
 //! Only proper-name-like words are learned (capitalised, at least four letters) that look like
-//! their Italian form: "Seraph" / "Serafini". A term is an English word, not a phrase, and it
-//! only acts on texts that contain that word.
+//! their Italian form: "Seraph" / "Serafini". The owner also writes terms by hand, a few words
+//! long too ("magic find" / "Ritrovamento magico"), for what the reviews decided. A term only
+//! acts on texts that contain its words, one after the other.
 
 use std::collections::HashSet;
 
@@ -50,10 +51,10 @@ fn plain(form: &str) -> bool {
 }
 
 impl Term {
-    /// True if the term is safe to keep and to use: an English word of letters, plain forms.
+    /// True if the term is safe to keep and to use: a few lowercase English words, plain forms.
     pub fn is_valid(&self) -> bool {
         (SHARED_MIN..=FORM_MAX).contains(&self.en.chars().count())
-            && self.en.chars().all(char::is_alphabetic)
+            && plain(&self.en)
             && self.en == self.en.to_lowercase()
             && plain(&self.it)
             && self.wrong.len() <= WRONG_MAX
@@ -201,17 +202,27 @@ fn english(texts: &[&str]) -> HashSet<String> {
     present
 }
 
+/// Whether `term` is in the English `texts`: its word (`present`, from `english`), or its words one
+/// after the other, the last one maybe in -s ("Magic Finds").
+fn appears(term: &Term, present: &HashSet<String>, texts: &[&str]) -> bool {
+    if !term.en.contains(' ') {
+        return present.contains(&term.en);
+    }
+    let plural = format!("{}s", term.en);
+    texts.iter().any(|t| has_words(t, &term.en) || has_words(t, &plural))
+}
+
 /// The terms of the glossary that appear in `texts` (English).
 pub fn relevant<'a>(terms: &'a [Term], texts: &[&str]) -> Vec<&'a Term> {
     let present = english(texts);
-    terms.iter().filter(|t| present.contains(&t.en)).collect()
+    terms.iter().filter(|t| appears(t, &present, texts)).collect()
 }
 
 /// `it` with the wrong forms of the terms in `en` replaced. Idempotent.
 pub fn fix(en: &str, it: &str, terms: &[Term]) -> String {
     let in_en = english(&[en]);
     let mut out = it.to_owned();
-    for term in terms.iter().filter(|t| in_en.contains(&t.en)) {
+    for term in terms.iter().filter(|t| appears(t, &in_en, &[en])) {
         for wrong in &term.wrong {
             out = replace_words(&out, wrong, &term.it);
         }
@@ -336,5 +347,24 @@ mod tests {
         let terms = [term("seraph", "Serafini", &["Serafi"]), term("vigil", "Vigilia", &["Veglia"])];
         let found = relevant(&terms, &["Join the Seraph.", "Nothing"]);
         assert_eq!(found, [&terms[0]]);
+    }
+
+    #[test]
+    fn a_term_of_a_few_words() {
+        let terms = [term("magic find", "Ritrovamento magico", &["Trovata magica"]), term("jump pad", "Piattaforma di salto", &[])];
+        assert!(terms.iter().all(Term::is_valid));
+        assert_eq!(relevant(&terms, &["+20%% Magic Find
++20%% Gold Find"]), [&terms[0]]);
+        assert_eq!(relevant(&terms, &["Use the jump pads."]), [&terms[1]]);
+        // The words apart, or only one of them, are not the term.
+        assert!(relevant(&terms, &["Find the magic jump."]).is_empty());
+        assert!(relevant(&terms, &["Magic
+Find"]).len() == 1, "a line break is a space between words");
+        assert_eq!(fix("+20%% Magic Find", "+20%% Trovata magica", &terms), "+20%% Ritrovamento magico");
+        assert_eq!(fix("+20%% Gold Find", "+20%% Trovata magica", &terms), "+20%% Trovata magica");
+        // Still not a sentence nor markup.
+        assert!(!term("magic find!", "x", &[]).is_valid());
+        assert!(!term("Magic Find", "x", &[]).is_valid());
+        assert!(!term("a b c d", "x", &[]).is_valid());
     }
 }

@@ -24,7 +24,7 @@ function plain(form) {
 export function termOf(row) {
   if (!Array.isArray(row) || row.length !== 3) return null;
   const [en, it, wrong] = row;
-  if (typeof en !== "string" || !/^\p{L}+$/u.test(en) || en !== en.toLowerCase()) return null;
+  if (!plain(en) || en !== en.toLowerCase()) return null;
   const length = [...en].length;
   if (length < SHARED_MIN || length > FORM_MAX) return null;
   if (!plain(it) || !Array.isArray(wrong) || wrong.length > WRONG_MAX || !wrong.every(plain)) return null;
