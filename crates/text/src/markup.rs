@@ -199,6 +199,22 @@ pub fn fix_wrap(en: &str, it: &str) -> String {
     if token_mismatch(en, &out).is_empty() && !wrap_broken(en, &out) { out } else { it.to_owned() }
 }
 
+/// The spaces at the end of each line of `en` (the books' markdown breaks a line on two of them)
+/// put back on the same line of `it`, which translators trim or shorten to one; only when both
+/// have the same lines.
+pub fn line_ends(en: &str, it: &str) -> String {
+    let (en_lines, it_lines): (Vec<&str>, Vec<&str>) = (en.split('\n').collect(), it.split('\n').collect());
+    if en_lines.len() != it_lines.len() || !en_lines.iter().any(|l| l.ends_with("  ")) {
+        return it.to_owned();
+    }
+    let lines: Vec<String> = en_lines
+        .iter()
+        .zip(&it_lines)
+        .map(|(e, i)| format!("{}{}", i.trim_end_matches(' '), &e[e.trim_end_matches(' ').len()..]))
+        .collect();
+    lines.join("\n")
+}
+
 /// The apostrophes and double quotes the game's own English uses (`'` and `"`): translators write
 /// `’ ‘` and `“ ” „` instead. `« »` are left as they are.
 pub fn straight_quotes(it: &str) -> String {
@@ -285,7 +301,7 @@ pub fn ability_labels(en: &str, it: &str) -> String {
 /// wrapper (`fix_wrap`), the `%` signs (`fix_percent`), the quotes (`straight_quotes`) and the skill
 /// labels (`ability_labels`).
 pub fn repair(en: &str, it: &str) -> String {
-    ability_labels(en, &fix_percent(en, &straight_quotes(&fix_wrap(en, it))))
+    line_ends(en, &ability_labels(en, &fix_percent(en, &straight_quotes(&fix_wrap(en, it)))))
 }
 
 /// A translator's answer after `repair` and the spaces put back; None if the markup is still
@@ -456,6 +472,15 @@ pub fn fix_percent(en: &str, it: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markdown_line_ends() {
+        let en = "Doyen.  \n  \n---\nText.";
+        assert_eq!(line_ends(en, "Doyen. \n \n---\nTesto."), "Doyen.  \n  \n---\nTesto.");
+        // Other lines, or no markdown break in the English: as it is.
+        assert_eq!(line_ends(en, "Doyen.\nTesto."), "Doyen.\nTesto.");
+        assert_eq!(line_ends("A.\nB.", "A. \nB."), "A. \nB.");
+    }
 
     #[test]
     fn stray_percent_signs() {
