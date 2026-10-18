@@ -50,6 +50,8 @@ Precision, Toughness, Vitality, Ferocity, Healing Power, Condition Damage...); \
 (\"il boon\", \"della condition\"). The verbs stay Italian (\"chill\" assiderare, \"cripple\" \
 azzoppare, \"stun\" stordire, \"daze\" disorientare). A stat prefix (Berserker's, Carrion) goes \
 after the Italian noun, without \"'s\" (\"Spadone Berserker\").
+- The other words of item names are translated, also in the miniatures, which keep \"Mini\" first \
+(\"Mini Siamese Cat\" is \"Mini Gatto siamese\", \"Mini Raven\" is \"Mini Corvo\").
 - Translate the same term the same way across the texts.
 ";
 

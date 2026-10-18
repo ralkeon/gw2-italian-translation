@@ -68,7 +68,8 @@ machine translators. For each text compare the Italian with the English and fix 
 - a wrong meaning: a false friend, a word taken in the wrong sense (\"Maximum Boon Scaling\" is how many \
 boons count, not a \"scala\"), a game term translated as a plain word;
 - something missing or added, a sentence that is broken or makes no sense;
-- wrong gender or number agreement, English words left untranslated that are not names.
+- wrong gender or number agreement, English words left untranslated that are not names (item names are \
+translated, also the miniatures, with \"Mini\" first: \"Mini Siamese Cat\" is \"Mini Gatto siamese\").
 A word[pl:\"...\"] is followed by the form it takes in the plural. In the name of a dye the colour named after a thing (ottone, oliva, smeraldo) does not change in the plural, nor do the words that describe it: \"Tintura[pl:\\\"Tinture\\\"] ottone radiante\", plural \"Tinture ottone radiante\"; a colour that is a plain adjective agrees: \"Tintura[pl:\\\"Tinture\\\"] verde[pl:\\\"verdi\\\"]\".
 Do not change what is correct: not the style, not word choices that are acceptable, not punctuation, apostrophes (’ or ') or quotes, not the same phrase worded otherwise in another text. In a line of a dialogue the speaker is a character you cannot see: keep the gender the translation gave them. If you are not sure something is a mistake, it is not one.
 
