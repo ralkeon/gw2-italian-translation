@@ -831,11 +831,16 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
     }
     let gsince = input["gsince"].as_i64().filter(|&s| s > 0).unwrap_or(0);
     let (terms, gseq, gmore) = glossary::pull(&db, gsince)?;
-    // The names that stay in English added after `nsince`: the addon gives them as they are.
+    // The names that stay in English added after `nsince`: the addon gives them as they are. The
+    // ones taken out after `usince`, to an addon that asks (older ones do not know them).
     let nsince = input["nsince"].as_i64().unwrap_or(0);
     let (english, nseq) = names::pull(&db, nsince)?;
+    let (unnames, useq) = match input["usince"].as_i64() {
+        Some(usince) => names::removed(&db, usince)?,
+        None => (Vec::new(), 0),
+    };
     Ok(json!({
         "rows": pulled, "seq": seq, "more": more, "next_s": NEXT_S, "accepted": rows.len(),
-        "glossary": terms, "gseq": gseq, "gmore": gmore, "names": english, "nseq": nseq,
+        "glossary": terms, "gseq": gseq, "gmore": gmore, "names": english, "nseq": nseq, "unnames": unnames, "useq": useq,
     }))
 }

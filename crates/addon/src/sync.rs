@@ -217,6 +217,8 @@ struct Mark {
     gsent: i64,
     /// The time of the newest name that stays in English received (from any server).
     nseq: i64,
+    /// The same for the names taken out of them.
+    useq: i64,
 }
 
 /// The sync_state key of the glossary's seq that goes with `seq_key`.
@@ -233,7 +235,7 @@ impl Mark {
         // from 10^12): what we had from the main server we need not get again.
         let seq = get(seq_key)?.max(get("seq")?);
         let gseq = get(&glossary_key(seq_key))?.max(get("gseq")?);
-        Ok(Self { seq, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")?, gseq, gsent: get("gsent_at")?, nseq: get("nseq")? })
+        Ok(Self { seq, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")?, gseq, gsent: get("gsent_at")?, nseq: get("nseq")?, useq: get("useq")? })
     }
 
     fn save(&self, tx: &Transaction, seq_key: &str) -> rusqlite::Result<()> {
@@ -247,6 +249,7 @@ impl Mark {
             (gkey.as_str(), self.gseq),
             ("gsent_at", self.gsent),
             ("nseq", self.nseq),
+            ("useq", self.useq),
         ] {
             stmt.execute(params![k, v])?;
         }
@@ -289,6 +292,11 @@ struct Reply {
     names: Vec<String>,
     #[serde(default)]
     nseq: i64,
+    // Missing from a server that does not take names out.
+    #[serde(default)]
+    unnames: Vec<String>,
+    #[serde(default)]
+    useq: i64,
 }
 
 /// Terms sent in one request (the server accepts up to 50).
@@ -313,7 +321,7 @@ fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Du
         let reply: Reply = post(
             &format!("{server}/sync"),
             Some(&token),
-            &json!({ "since": mark.seq, "rows": rows, "gsince": mark.gseq, "glossary": terms, "nsince": mark.nseq }),
+            &json!({ "since": mark.seq, "rows": rows, "gsince": mark.gseq, "glossary": terms, "nsince": mark.nseq, "usince": mark.useq }),
         )
         .map_err(refused)?;
         if let Some(last) = outgoing.last() {
@@ -323,9 +331,10 @@ fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Du
         mark.gsent = mark.gsent.max(terms_at);
         mark.gseq = mark.gseq.max(reply.gseq);
         mark.nseq = mark.nseq.max(reply.nseq);
+        mark.useq = mark.useq.max(reply.useq);
         // The glossary first: the translations that come with it are repaired with it.
         received_terms(&reply.glossary);
-        received_names(con, &reply.names)?;
+        received_names(con, &reply.names, &reply.unnames)?;
         received += apply(con, &reply.rows, mark, target.seq_key())?;
         sent += outgoing.len();
         next = Duration::from_secs(reply.next_s.clamp(30, 3600));
@@ -449,9 +458,10 @@ fn received_terms(terms: &[RemoteTerm]) {
     store::receive_terms(valid);
 }
 
-/// The names that stay in English the server sent: kept, and used from now on (translate.rs).
-fn received_names(con: &mut Connection, names: &[String]) -> rusqlite::Result<()> {
-    if names.is_empty() {
+/// The names that stay in English the server sent: kept, and used from now on (translate.rs); and
+/// the ones it took out of them, no longer kept in English.
+fn received_names(con: &mut Connection, names: &[String], unnames: &[String]) -> rusqlite::Result<()> {
+    if names.is_empty() && unnames.is_empty() {
         return Ok(());
     }
     let tx = con.transaction()?;
@@ -460,9 +470,13 @@ fn received_names(con: &mut Connection, names: &[String]) -> rusqlite::Result<()
         for name in names.iter().filter(|n| n.chars().count() <= 100) {
             insert.execute([name])?;
         }
+        let mut delete = tx.prepare_cached("DELETE FROM english_names WHERE name = ?1")?;
+        for name in unnames {
+            delete.execute([name])?;
+        }
     }
     tx.commit()?;
-    log::info!("sync: {} names that stay in English", names.len());
+    log::info!("sync: {} names that stay in English, {} taken out", names.len(), unnames.len());
     store::load_names(con)
 }
 
@@ -643,12 +657,16 @@ mod tests {
     #[test]
     fn names_that_stay_in_english_are_kept_and_used() {
         let mut con = db();
-        received_names(&mut con, &["Signet of Rage".to_owned(), "Firebrand".to_owned()]).unwrap();
-        received_names(&mut con, &["Firebrand".to_owned()]).unwrap();
+        received_names(&mut con, &["Signet of Rage".to_owned(), "Firebrand".to_owned(), "Mithril Ore".to_owned()], &[]).unwrap();
+        received_names(&mut con, &["Firebrand".to_owned()], &[]).unwrap();
         let count: i64 = con.query_row("SELECT count(*) FROM english_names", [], |r| r.get(0)).unwrap();
-        assert_eq!(count, 2);
+        assert_eq!(count, 3);
         assert_eq!(store::english_name("Signet of Rage").as_deref(), Some("Signet of Rage"));
         assert_eq!(store::english_name("Signet of Rage Recharge"), None);
+        // Taken out by the server: no longer kept in English.
+        received_names(&mut con, &[], &["Mithril Ore".to_owned()]).unwrap();
+        assert_eq!(store::english_name("Mithril Ore"), None);
+        assert_eq!(store::english_name("Firebrand").as_deref(), Some("Firebrand"));
     }
 
     /// Against a running server: cd server && npx wrangler dev, then

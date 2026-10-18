@@ -35,6 +35,19 @@ CREATE TABLE IF NOT EXISTS english_names (
     kind  TEXT    NOT NULL,       -- profession, specialization, skill, trait, item, upgrade, boon, condition
     added INTEGER NOT NULL
 );
+-- The names taken out of english_names (by anyone: a trigger), so that the addons take them out
+-- too; a name put back leaves this table.
+CREATE TABLE IF NOT EXISTS english_names_removed (
+    name    TEXT    PRIMARY KEY,
+    removed INTEGER NOT NULL      -- unix ms
+);
+CREATE TRIGGER IF NOT EXISTS english_names_deleted AFTER DELETE ON english_names BEGIN
+    INSERT OR REPLACE INTO english_names_removed (name, removed)
+    VALUES (old.name, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));
+END;
+CREATE TRIGGER IF NOT EXISTS english_names_readded AFTER INSERT ON english_names BEGIN
+    DELETE FROM english_names_removed WHERE name = new.name;
+END;
 -- The stat prefixes and the items named after one, with the prefix (gw2it_text::names::Names::affix).
 CREATE TABLE IF NOT EXISTS affixes (
     text  TEXT    PRIMARY KEY,
@@ -101,12 +114,22 @@ pub fn load(con: &Connection) -> rusqlite::Result<Names> {
 
 /// The names added after `since` (unix ms), and the time of the newest (`since` if none), for /sync.
 pub fn pull(con: &Connection, since: i64) -> rusqlite::Result<(Vec<String>, i64)> {
-    let mut stmt = con.prepare_cached("SELECT name, added FROM english_names WHERE added > ?1")?;
+    changed(con, "SELECT name, added FROM english_names WHERE added > ?1", since)
+}
+
+/// The names taken out after `since` (unix ms), and the time of the newest (`since` if none), for
+/// /sync: on their own mark, so that an addon that does not know them yet gets them all once it does.
+pub fn removed(con: &Connection, since: i64) -> rusqlite::Result<(Vec<String>, i64)> {
+    changed(con, "SELECT name, removed FROM english_names_removed WHERE removed > ?1", since)
+}
+
+fn changed(con: &Connection, sql: &str, since: i64) -> rusqlite::Result<(Vec<String>, i64)> {
+    let mut stmt = con.prepare_cached(sql)?;
     let mut newest = since;
     let mut list = Vec::new();
     for row in stmt.query_map([since], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
-        let (name, added) = row?;
-        newest = newest.max(added);
+        let (name, at) = row?;
+        newest = newest.max(at);
         list.push(name);
     }
     Ok((list, newest))
@@ -492,6 +515,20 @@ mod tests {
         assert_eq!(pull(&con, 0).unwrap().0.len(), 4);
         assert_eq!(pull(&con, 1).unwrap(), (vec!["Firebrand".to_owned()], 5));
         assert_eq!(pull(&con, 5).unwrap(), (vec![], 5));
+    }
+
+    #[test]
+    fn the_addons_get_the_names_taken_out_since_their_last_sync() {
+        let con = db();
+        con.execute("DELETE FROM english_names WHERE name = 'The Dreamer'", []).unwrap();
+        let (list, newest) = removed(&con, 0).unwrap();
+        assert_eq!(list, ["The Dreamer"]);
+        assert!(newest > 5);
+        assert_eq!(removed(&con, newest).unwrap(), (vec![], newest));
+        // Taking it out does not move the mark of the names added; a name put back is no longer out.
+        assert_eq!(pull(&con, 1).unwrap().1, 1);
+        con.execute("INSERT INTO english_names VALUES ('The Dreamer', 'item', ?1)", [newest + 1]).unwrap();
+        assert_eq!(removed(&con, 0).unwrap().0.len(), 0);
     }
 
     #[test]
