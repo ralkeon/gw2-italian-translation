@@ -1,8 +1,8 @@
-//! The glossary of Nike's Local Translator module (glossary_it.json), brought into ours:
-//! `gw2it-server nike-glossary --file glossary_it.json [--excluded server/nike-glossary-excluded.json] [--dry-run]`.
+//! The glossary of the Local Translator module (glossary_it.json), brought into ours:
+//! `gw2it-server import-glossary --file glossary_it.json [--excluded server/glossary-import-excluded.json] [--dry-run]`.
 //!
 //! What is the same word in both sides ("Fractal": "Fractal") is a name that stays in English: it
-//! goes into `english_names` (kind `nike`), which the server and the addons already use to keep a
+//! goes into `english_names` (kind `imported`), which the server and the addons already use to keep a
 //! name in a sentence and as a whole text (gw2it-text names.rs). What it translates (a word with an
 //! Italian form: "Weaponsmith": "Fabbro") goes into the glossary, as the owner says it. Left out:
 //! - the lowercase terms and the possessive ones ("Dragon's"): not names, but words of a sentence;
@@ -19,7 +19,7 @@ use serde_json::Value;
 
 use crate::{glossary as server_glossary, now_ms};
 
-pub const KIND: &str = "nike";
+pub const KIND: &str = "imported";
 
 #[derive(Default, Debug, PartialEq)]
 pub struct Plan {
@@ -29,7 +29,7 @@ pub struct Plan {
     pub translated: Vec<(String, String)>,
     /// Left out, with the reason.
     pub left_out: Vec<(String, String)>,
-    /// What our mechanisms cannot say: (what Nike has, Italian, why).
+    /// What our mechanisms cannot say: (what the imported glossary has, Italian, why).
     pub unsupported: Vec<(String, String, &'static str)>,
 }
 
@@ -67,7 +67,7 @@ pub fn plan(glossary: &Value, excluded: &HashMap<String, String>) -> Plan {
             continue;
         }
         // Translated: a word the glossary can say, else listed. The lowercase and the capitalised
-        // form of Nike are one word for us; the lowercase one's Italian is used.
+        // form of the imported glossary are one word for us; the lowercase one's Italian is used.
         let word = en.to_lowercase();
         let term = Term { en: word.clone(), it: it.to_owned(), wrong: Vec::new() };
         if let Some(reason) = excluded.get(en.as_str()) {
@@ -104,8 +104,8 @@ pub fn apply(con: &Connection, plan: &Plan) -> rusqlite::Result<(usize, usize)> 
     }
     for (en, it) in &plan.translated {
         let term = Term { en: en.clone(), it: it.clone(), wrong: Vec::new() };
-        // The owner says it (trust 3): Nike's decisions are ours, until someone corrects them.
-        if server_glossary::put(&tx, &term, "nike", 3, now, 0)? {
+        // The owner says it (trust 3): the imported decisions are ours, until someone corrects them.
+        if server_glossary::put(&tx, &term, KIND, 3, now, 0)? {
             terms += 1;
         }
     }

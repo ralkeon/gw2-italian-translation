@@ -34,7 +34,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 mod consistency;
 mod glossary;
 mod names;
-mod nike;
+mod glossary_import;
 mod byhand;
 mod plurals;
 mod priority;
@@ -103,7 +103,7 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
        gw2it-server plurals [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
        gw2it-server review|plurals [--db gw2it.db] (--ask-to <file> | --answers <file>) [--max-texts 200] [--dry-run]
-       gw2it-server nike-glossary --file glossary_it.json [--excluded nike-glossary-excluded.json] [--db gw2it.db] [--dry-run]
+       gw2it-server import-glossary --file glossary_it.json [--excluded glossary-import-excluded.json] [--db gw2it.db] [--dry-run]
        gw2it-server repair [--db gw2it.db] [--dry-run]";
 
 fn main() {
@@ -113,9 +113,9 @@ fn main() {
     let english_names = args.first().is_some_and(|a| a == "names");
     let review = args.first().is_some_and(|a| a == "review");
     let plurals = args.first().is_some_and(|a| a == "plurals");
-    let nike = args.first().is_some_and(|a| a == "nike-glossary");
+    let import = args.first().is_some_and(|a| a == "import-glossary");
     let repair = args.first().is_some_and(|a| a == "repair");
-    if replicate || consistency || english_names || review || plurals || nike || repair {
+    if replicate || consistency || english_names || review || plurals || import || repair {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -184,12 +184,12 @@ fn main() {
         }
         return;
     }
-    if nike {
+    if import {
         let Some(file) = options.remove("--file") else {
             eprintln!("{USAGE}");
             std::process::exit(2);
         };
-        run_nike_glossary(&db, &file, options.remove("--excluded").as_deref(), dry_run);
+        run_import_glossary(&db, &file, options.remove("--excluded").as_deref(), dry_run);
         return;
     }
     if plurals {
@@ -416,9 +416,9 @@ fn run_review(db: &str, ask: &names::Ask, max_texts: usize, dry_run: bool) {
     }
 }
 
-/// Nike's glossary into ours (nike.rs): a summary, the terms left out with their reasons, and with
+/// The Local Translator module's glossary into ours (glossary_import.rs): a summary, the terms left out with their reasons, and with
 /// no `--dry-run` the names and the terms written.
-fn run_nike_glossary(db: &str, file: &str, excluded_file: Option<&str>, dry_run: bool) {
+fn run_import_glossary(db: &str, file: &str, excluded_file: Option<&str>, dry_run: bool) {
     let read = |path: &str| -> Value {
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
             eprintln!("cannot read {path}: {e}");
@@ -430,8 +430,8 @@ fn run_nike_glossary(db: &str, file: &str, excluded_file: Option<&str>, dry_run:
         })
     };
     let glossary = read(file);
-    let excluded = excluded_file.map(|f| nike::excluded(&read(f))).unwrap_or_default();
-    let plan = nike::plan(&glossary, &excluded);
+    let excluded = excluded_file.map(|f| glossary_import::excluded(&read(f))).unwrap_or_default();
+    let plan = glossary_import::plan(&glossary, &excluded);
     for (term, why) in &plan.left_out {
         println!("left out: {term:?}: {why}");
     }
@@ -439,7 +439,7 @@ fn run_nike_glossary(db: &str, file: &str, excluded_file: Option<&str>, dry_run:
         println!("not supported: {term:?} -> {it:?}: {why}");
     }
     println!(
-        "nike-glossary: {} names to keep in English, {} words with an Italian form, {} left out, {} not supported",
+        "import-glossary: {} names to keep in English, {} words with an Italian form, {} left out, {} not supported",
         plan.keep.len(),
         plan.translated.len(),
         plan.left_out.len(),
@@ -453,10 +453,10 @@ fn run_nike_glossary(db: &str, file: &str, excluded_file: Option<&str>, dry_run:
         eprintln!("cannot open {db}: {e}");
         std::process::exit(1);
     });
-    match nike::apply(&con, &plan) {
-        Ok((names, terms)) => println!("nike-glossary: {names} names added, {terms} glossary terms changed"),
+    match glossary_import::apply(&con, &plan) {
+        Ok((names, terms)) => println!("import-glossary: {names} names added, {terms} glossary terms changed"),
         Err(e) => {
-            eprintln!("nike-glossary: database: {e}");
+            eprintln!("import-glossary: database: {e}");
             std::process::exit(1);
         }
     }

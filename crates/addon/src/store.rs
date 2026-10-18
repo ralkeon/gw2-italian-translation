@@ -327,9 +327,9 @@ fn repair_auto(con: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// map_it.db: the same texts in the format of the Local Translator module (Nike's
-/// lt_server.KeyMap), kept next to strings.db so it can be sent to him and merged with his
-/// tools/unisci_contributi.py:
+/// map_it.db: the same texts in the format of the Local Translator module
+/// (lt_server.KeyMap), kept next to strings.db so it can be sent to its author and merged with
+/// its tools/unisci_contributi.py:
 /// - texts: one row per string ID with its newest English, our translation (NULL if none) and
 ///   how = 'api-<addon version>' (seen in game, by the version that wrote the file);
 /// - suggestions: our hand corrections, with the contributor as author (version 0: we have no
@@ -354,7 +354,7 @@ const MAP_SCHEMA: &str = "
         suggestion_source TEXT,           -- Italian text before the correction, NULL if unknown
         suggestion TEXT NOT NULL,
         author     TEXT NOT NULL,
-        version    INTEGER NOT NULL,      -- patch version (Nike's): always 0 here
+        version    INTEGER NOT NULL,      -- patch version (Local Translator's): always 0 here
         src_hash   INTEGER                -- XXH3-64 of the English, as in Text Translator's cache.db
     );
     CREATE INDEX IF NOT EXISTS map.suggestions_key ON suggestions(key, id);
