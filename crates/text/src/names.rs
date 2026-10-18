@@ -354,13 +354,15 @@ pub fn term_elided(it: &str) -> bool {
 pub const TERM_ATTRIBUTES: &[&str] = &["Condition Damage", "Condition Duration", "Boon Duration", "Black Lion Trading Company"];
 
 /// The words of the English `en` that a rewrite `new` of the Italian `old` brought in while not
-/// part of `keep` (the names and terms to put back) nor of `TERM_ATTRIBUTES`: "+5 Armatura"
+/// part of `keep` (the names and terms to put back), of `TERM_ATTRIBUTES` nor of the skill labels
+/// (`markup::skill_labels`): "+5 Armatura"
 /// become "+5 Armor" is a word translated back, not a name put back.
 pub fn english_brought_in<'a>(en: &str, old: &str, new: &'a str, keep: &[&str]) -> Vec<&'a str> {
     let lower = |s: &str| words(s).iter().map(|w| w.text.to_lowercase()).collect::<std::collections::HashSet<_>>();
+    let labels = crate::markup::skill_labels(en);
     let (en, old) = (lower(en), lower(old));
     let mut allowed = std::collections::HashSet::new();
-    for k in keep.iter().chain(TERM_ATTRIBUTES) {
+    for k in keep.iter().chain(TERM_ATTRIBUTES).chain(&labels) {
         allowed.extend(lower(k));
     }
     for (_, forms) in TERMS {
@@ -389,7 +391,8 @@ mod tests {
         assert!(english_brought_in(en, "+7 Danni da condizione +5 Armatura", "+7 Condition Damage +5 Armatura", &["condition"]).is_empty());
         let en = "<c=@abilitytype>Cantrip.</c> Gain a barrier for each boon.";
         let old = "<c=@abilitytype>Incantesimo minore.</c> Ottieni una barriera per ogni benedizione.";
-        assert_eq!(english_brought_in(en, old, "<c=@abilitytype>Cantrip.</c> Ottieni una barriera per ogni boon.", &["boon"]), ["Cantrip"]);
+        // The skill labels stay in English (markup::ability_labels): "Cantrip" is no word brought back.
+        assert!(english_brought_in(en, old, "<c=@abilitytype>Cantrip.</c> Ottieni una barriera per ogni boon.", &["boon"]).is_empty());
         assert!(english_brought_in(en, old, "<c=@abilitytype>Incantesimo minore.</c> Ottieni una barriera per ogni boon.", &["boon"]).is_empty());
     }
 

@@ -214,10 +214,78 @@ pub fn straight_quotes(it: &str) -> String {
         .collect()
 }
 
+const ABILITY_OPEN: &str = "<c=@abilitytype>";
+
+/// The labels the game puts in `<c=@abilitytype>` that are no skill type: these are translated.
+/// Nor "shatter" and "explosion" in lowercase: a verb and a word of the sentence ("each clone you
+/// shatter", "strike with explosion").
+const NOT_SKILL_LABELS: &[&str] = &["Shared Inventory:", "Chair.", "Costume Brawl Toy:", "Vault Category: Locally Threatening", "shatter", "explosion"];
+
+/// The bodies of the `<c=@abilitytype>...</c>` of `text`, in order; None if one is not closed.
+fn ability_bodies(text: &str) -> Option<Vec<(usize, usize)>> {
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(at) = text[from..].find(ABILITY_OPEN) {
+        let start = from + at + ABILITY_OPEN.len();
+        let end = start + text[start..].find("</c>")?;
+        if text[start..end].contains("<c=") {
+            return None;
+        }
+        out.push((start, end));
+        from = end;
+    }
+    Some(out)
+}
+
+/// The words in the `<c=@abilitytype>` of `en` that are skill types and labels (see `ability_labels`).
+pub fn skill_labels(en: &str) -> Vec<&str> {
+    ability_bodies(en).unwrap_or_default().into_iter().map(|(s, e)| &en[s..e]).filter(|b| !NOT_SKILL_LABELS.contains(&b.trim())).collect()
+}
+
+/// `it` with the skill types and labels in `<c=@abilitytype>` as the English has them: players say
+/// "Glamour", "Signet", "Shatter", "Cantrip" for every profession and specialization, as the wiki and
+/// the builds do. `it` as it is if its `<c=@abilitytype>` are not the ones of `en`, one for one.
+pub fn ability_labels(en: &str, it: &str) -> String {
+    let (Some(en_bodies), Some(it_bodies)) = (ability_bodies(en), ability_bodies(it)) else {
+        return it.to_owned();
+    };
+    if en_bodies.is_empty() || en_bodies.len() != it_bodies.len() {
+        return it.to_owned();
+    }
+    // Where a label ("Trap.", "Signet Active:") opens the text or a line, the start of the line up to it: a translator split
+    // "Legendary Centaur." into "Centauro <c=@abilitytype>Leggendario.</c>".
+    let line_start = |text: &str, at: usize| {
+        let before = &text[..at - ABILITY_OPEN.len()];
+        before.rfind("<br>").map(|i| i + 4).max(before.rfind('\n').map(|i| i + 1)).unwrap_or(0)
+    };
+    let mut out = String::with_capacity(it.len());
+    let mut last = 0;
+    for (&(es, ee), &(is, ie)) in en_bodies.iter().zip(&it_bodies) {
+        let body = &en[es..ee];
+        if NOT_SKILL_LABELS.contains(&body.trim()) {
+            out.push_str(&it[last..ie]);
+        } else {
+            let opens_line = body.trim_end().ends_with(['.', ':']) && en[line_start(en, es)..es - ABILITY_OPEN.len()].trim().is_empty();
+            let from = line_start(it, is).max(last);
+            if opens_line && !it[from..is - ABILITY_OPEN.len()].trim().is_empty() {
+                out.push_str(&it[last..from]);
+                out.push_str(ABILITY_OPEN);
+            } else {
+                out.push_str(&it[last..is]);
+            }
+            out.push_str(body);
+        }
+        last = ie;
+    }
+    out.push_str(&it[last..]);
+    out
+}
+
 /// Everything wrong with the markup and the quotes that can be put right from the English: the
-/// wrapper (`fix_wrap`), the `%` signs (`fix_percent`) and the quotes (`straight_quotes`).
+/// wrapper (`fix_wrap`), the `%` signs (`fix_percent`), the quotes (`straight_quotes`) and the skill
+/// labels (`ability_labels`).
 pub fn repair(en: &str, it: &str) -> String {
-    fix_percent(en, &straight_quotes(&fix_wrap(en, it)))
+    ability_labels(en, &fix_percent(en, &straight_quotes(&fix_wrap(en, it))))
 }
 
 /// A translator's answer after `repair` and the spaces put back; None if the markup is still
@@ -442,6 +510,31 @@ mod tests {
         // English already starts inside a span: its closing first is not a mistake.
         assert!(!wrap_broken("Hits.</c><br><c=@reminder>Once.</c>", "Colpi.</c><br><c=@reminder>Una volta.</c>"));
         assert_eq!(fix_wrap(en, "Le abilità di \"Attacco</c> <c=@abilitytype>doppio\" indeboliscono."), "Le abilità di \"Attacco</c> <c=@abilitytype>doppio\" indeboliscono.");
+    }
+
+    #[test]
+    fn skill_labels_stay_in_english() {
+        let en = "<c=@abilitytype>Glamour.</c> Create a dome.";
+        assert_eq!(repair(en, "<c=@abilitytype>Ammaliamento.</c> Crea una cupola."), "<c=@abilitytype>Glamour.</c> Crea una cupola.");
+        let en = "<c=@abilitytype>Signet Passive:</c> Grants fury. <br><c=@abilitytype>Signet Active:</c> Root foes.";
+        assert_eq!(
+            ability_labels(en, "<c=@abilitytype>Passiva del sigillo:</c> Conferisce Fury. <br><c=@abilitytype>Attiva del sigillo:</c> Immobilizza."),
+            "<c=@abilitytype>Signet Passive:</c> Conferisce Fury. <br><c=@abilitytype>Signet Active:</c> Immobilizza."
+        );
+        // In a sentence, where the translator put it.
+        assert_eq!(ability_labels("<c=@abilitytype>Phantasms</c> have fury.", "I tuoi <c=@abilitytype>fantasmi</c> hanno Fury."), "I tuoi <c=@abilitytype>Phantasms</c> hanno Fury.");
+        // A label split by the translator: the Italian left before it goes.
+        let en = "<c=@abilitytype>Legendary Centaur.</c> Push the tablet.<br><c=@abilitytype>Engineering Kit.</c> Equip a kit.";
+        assert_eq!(
+            ability_labels(en, "Centauro <c=@abilitytype>Leggendario.</c> Spingi la tavoletta.<br>Kit di <c=@abilitytype>Ingegneria.</c> Equipaggia un kit."),
+            "<c=@abilitytype>Legendary Centaur.</c> Spingi la tavoletta.<br><c=@abilitytype>Engineering Kit.</c> Equipaggia un kit."
+        );
+        // Labels that are no skill type, a different count, a broken span: left alone.
+        assert_eq!(ability_labels("<c=@abilitytype>Chair.</c> Sit.", "<c=@abilitytype>Sedia.</c> Siediti."), "<c=@abilitytype>Sedia.</c> Siediti.");
+        assert_eq!(ability_labels("<c=@abilitytype>Trap.</c> Set it.", "Piazzala."), "Piazzala.");
+        let en = "<c=@abilitytype>Dual Attack</c> skills weaken enemies.";
+        assert_eq!(ability_labels(en, "Le abilità di \"Attacco</c> <c=@abilitytype>doppio\" indeboliscono."), "Le abilità di \"Attacco</c> <c=@abilitytype>doppio\" indeboliscono.");
+        assert_eq!(skill_labels("<c=@abilitytype>Chair.</c> <c=@abilitytype>Trap.</c>"), ["Trap."]);
     }
 
     fn round_trip(en: &str, fake_translation: impl Fn(&str) -> String) -> Option<String> {

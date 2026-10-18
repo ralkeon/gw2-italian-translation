@@ -85,7 +85,7 @@ If in a text such a word is not the mechanic, the weapon or the attribute (\"you
 add \"mechanic\": false.
 - \"glossary\": how these English words are translated; use these Italian forms.
 \"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: English loanwords, the same in the plural (\"la rune\", \"i sigil\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\". A stat prefix in \"keep\" (\"Berserker\", \"Carrion\") stays in English without the \"'s\", after the Italian noun, with no article or preposition (\"Insegna in seta Berserker\", never \"del Berserker\"). Nothing else goes back to English: boons and conditions written in lowercase in the English (\"inflict bleeding\", \"grant might\") stay translated (\"grant might\" is \"conferisci potenza\"). The attributes in \"keep\" (Power, Precision, Toughness, Vitality, Ferocity, Healing Power, Concentration, Expertise, Agony Resistance) stay in English, capitalised, never elided (\"+100 Power\", \"in base al tuo Power\"). Skill types and labels \
-(\"Incantesimo minore.\") stay in Italian. Keep every %token%, every <tag>, every [tag] and every line \
+in <c=@abilitytype> (\"Glamour.\", \"Signet Passive:\", \"Phantasms\") stay in English as the English has them, for every profession. Keep every %token%, every <tag>, every [tag] and every line \
 break exactly as they are. \"%%\" is the percent sign (\"25%%\"): never write a single \"%\", the game cuts the text there.
 
 Answer with JSON: {\"texts\": [{\"n\": <the text's n>, \"ok\": true} for a text that is right, or \
@@ -150,7 +150,7 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool, 
         return Some("empty or too long");
     }
     if by_hand {
-        let broken = !markup::token_mismatch(en, new).is_empty() || markup::stray_percent(new) || markup::wrap_broken(en, new);
+        let broken = !markup::token_mismatch(en, new).is_empty() || markup::stray_percent(new) || markup::wrap_broken(en, new) || markup::ability_labels(en, new) != new;
         return broken.then_some("markup changed");
     }
     if !names.missing(en, new).is_empty() {
@@ -165,7 +165,7 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool, 
     if !names::english_brought_in(en, old, new, &keep(names, en, old)).is_empty() {
         return Some("English brought back");
     }
-    if !markup::token_mismatch(en, new).is_empty() || markup::stray_percent(new) || markup::wrap_broken(en, new) || old.contains("[pl:") != new.contains("[pl:") {
+    if !markup::token_mismatch(en, new).is_empty() || markup::stray_percent(new) || markup::wrap_broken(en, new) || markup::ability_labels(en, new) != new || old.contains("[pl:") != new.contains("[pl:") {
         return Some("markup changed");
     }
     if glossary::fix(en, new, terms) != new {
