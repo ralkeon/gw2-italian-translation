@@ -340,6 +340,8 @@ pub const TERMS: &[(&str, &[&str])] = &[
     ("Swiftness", &["swiftness"]),
     ("Vigor", &["vigor"]),
     ("Superspeed", &["superspeed"]),
+    ("Stealth", &["stealth"]),
+    ("Distortion", &["distortion"]),
     ("Bleeding", &["bleeding"]),
     ("Blinded", &["blinded", "blindness"]),
     ("Burning", &["burning"]),

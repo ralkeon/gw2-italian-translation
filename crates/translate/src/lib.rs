@@ -42,7 +42,8 @@ in English.
 skills, traits, specializations, professions and mounts; the skill types and labels (Glamour, \
 Signet, Shatter, Mantra, Trap...); the boons and conditions by name, capitalised, also where the \
 English writes them in lowercase (\"grant might\" is \"conferisci Might\", \"inflict bleeding\" is \
-\"infliggi Bleeding\"; Fury, Quickness, Swiftness, Aegis, Burning, Vulnerability, Weakness...); \
+\"infliggi Bleeding\"; Fury, Quickness, Swiftness, Aegis, Burning, Vulnerability, Weakness, \
+Stealth, Distortion...); \
 Stun, Daze, Knockback, Knockdown, Fear, Taunt as names and in lists; the attributes (Power, \
 Precision, Toughness, Vitality, Ferocity, Healing Power, Condition Damage...); \"boon\", \
 \"condition\", \"rune\", \"sigil\", \"relic\", \"focus\" (the weapon) as loanwords, never elided \
