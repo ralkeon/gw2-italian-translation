@@ -9,7 +9,7 @@
 //! gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>   (see replicate.rs)
 //! gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
 //!                                                                         (see consistency.rs)
-//! gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts 300] [--dry-run]
+//! gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts N] [--dry-run]
 //!                                                                         (see names.rs)
 //! gw2it-server repair [--db gw2it.db] [--dry-run]   (the `%` a translator added, in every row)
 //! gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
@@ -99,7 +99,7 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
                     [--translators translators.json]
        gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>
        gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
-       gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts 300] [--dry-run]
+       gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts N] [--dry-run]
        gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
        gw2it-server plurals [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
        gw2it-server review|plurals [--db gw2it.db] (--ask-to <file> | --answers <file>) [--max-texts 200] [--dry-run]
@@ -166,7 +166,7 @@ fn main() {
         return;
     }
     if english_names {
-        let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(300);
+        let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(usize::MAX);
         run_names(&db, fetch, options.remove("--translators").as_deref(), max_texts, dry_run);
         return;
     }
@@ -284,6 +284,10 @@ fn run_consistency(db: &str, translators_file: &str, max_groups: usize, dry_run:
     }
 }
 
+/// How long the jobs run by cron wait in a row for busy language models (HTTP 503...) before
+/// they stop: they go on until their texts are done or the quota is used up.
+const PATIENCE: Duration = Duration::from_secs(2 * 3600);
+
 /// The names that stay in English (names.rs): the official API's list with `fetch`, then the
 /// machine translations that lost one, fixed (by the language models of translators.json, if
 /// given; without, only the texts that are the name).
@@ -303,7 +307,7 @@ fn run_names(db: &str, fetch: bool, translators_file: Option<&str>, max_texts: u
     }
     let mut chain = Chain::default();
     chain.set(translators_file.map(translators).unwrap_or_default());
-    let ask = |system: &str, user: &str| chain.ask(system, user).map_err(|e| e.to_string());
+    let ask = |system: &str, user: &str| chain.ask_patiently(system, user, PATIENCE).map_err(|e| e.to_string());
     let ask: Option<&names::Ask> = if chain.is_empty() { None } else { Some(&ask) };
     match names::run(&con, ask, &names::Options { dry_run, max_texts }) {
         Ok(r) => println!(
@@ -374,7 +378,7 @@ fn model(options: &mut HashMap<String, String>) -> Box<names::Ask<'static>> {
             chain.set(translators(&file));
             // Never by hand: a model cannot skip the checks.
             return Box::new(move |system: &str, user: &str| {
-                let mut answer = chain.ask(system, user).map_err(|e| e.to_string())?;
+                let mut answer = chain.ask_patiently(system, user, PATIENCE).map_err(|e| e.to_string())?;
                 if let Some(o) = answer.as_object_mut() {
                     o.remove(byhand::FLAG);
                 }

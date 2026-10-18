@@ -331,4 +331,43 @@ impl Chain {
         }
         Err(last)
     }
+
+    /// As `ask`, for the jobs that run alone (cron): when the models are only busy (HTTP 503, too
+    /// many requests, network) it waits and asks again, longer each time (1, 2, 5, 10, then 15
+    /// minutes), until they answer or `patience` of waiting in a row is spent. Out of quota, a
+    /// wrong key or a refusal end it at once, as does a wait longer than what patience is left.
+    pub fn ask_patiently(&self, system: &str, user: &str, patience: Duration) -> Result<Value, Error> {
+        const WAITS: [u64; 5] = [60, 120, 300, 600, 900];
+        let mut waited = Duration::ZERO;
+        let mut tries = 0;
+        loop {
+            let e = match self.ask(system, user) {
+                Ok(answer) => return Ok(answer),
+                Err(e @ (Error::QuotaExceeded | Error::Forbidden | Error::BadRequest(_) | Error::Unsupported)) => return Err(e),
+                Err(e) => e,
+            };
+            // Not before a model is out of its pause; a pause of half an hour or more is a quota used up.
+            let ready = self.ready_in();
+            let wait = ready.max(Duration::from_secs(WAITS[tries.min(WAITS.len() - 1)]));
+            if ready >= Duration::from_secs(1800) || waited + wait > patience {
+                return Err(e);
+            }
+            // These jobs write to their log file: no logger there.
+            eprintln!("{e}; asking again in {}s", wait.as_secs());
+            std::thread::sleep(wait);
+            waited += wait;
+            tries += 1;
+        }
+    }
+
+    /// How long until a language model can be tried: zero if one can now.
+    fn ready_in(&self) -> Duration {
+        let now = Instant::now();
+        self.slots
+            .iter()
+            .filter(|s| !matches!(s.engine, Engine::Deepl { .. } | Engine::Azure { .. } | Engine::Server { .. }))
+            .map(|s| s.paused_until.lock().unwrap().map_or(Duration::ZERO, |t| t.saturating_duration_since(now)))
+            .min()
+            .unwrap_or(Duration::ZERO)
+    }
 }
