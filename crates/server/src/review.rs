@@ -12,7 +12,8 @@
 //! What it answers is checked as the names job checks its own (markup, names, terms, no English
 //! word brought back but those); a text that fails stays as it is, and the nightly jobs try again.
 //! Answered by hand (byhand.rs) only the markup is checked: there the judgment of the meaning is
-//! the person's, a name or a term that is a plain word in that sentence is theirs to tell.
+//! the person's, a name or a term that is a plain word in that sentence is theirs to tell; the fix
+//! is written as `byhand`, above the jobs (priority.rs).
 //! A text (English and Italian) is reviewed once: `reviewed`. Every rewrite goes into `history`
 //! and `review_log` with the model's reason, and to the addons with /sync. Hand corrections are
 //! never touched.
@@ -101,7 +102,8 @@ pub struct Text {
 #[derive(Debug, PartialEq)]
 pub enum Verdict {
     Ok,
-    Fixed { it: String, why: String },
+    /// `by_hand`: answered by hand (byhand.rs), written as priority.rs's BY_HAND.
+    Fixed { it: String, why: String, by_hand: bool },
     /// The model's fix failed a check (the reason): the text stays.
     Refused(String),
 }
@@ -209,7 +211,7 @@ pub fn ask(ask: &Ask, names: &Names, terms: &[Term], texts: &[Text]) -> Result<V
             Some(_) if !FIXES.contains(&a["kind"].as_str().unwrap_or("")) => right(text),
             None => continue,
             Some(new) => match check(names, terms, text, new, mechanic, by_hand) {
-                None => Verdict::Fixed { it: new.to_owned(), why: a["why"].as_str().unwrap_or("").chars().take(300).collect() },
+                None => Verdict::Fixed { it: new.to_owned(), why: a["why"].as_str().unwrap_or("").chars().take(300).collect(), by_hand },
                 Some(why) => Verdict::Refused(format!("{why}: {new:?}")),
             },
         });
@@ -227,10 +229,10 @@ pub fn apply(con: &Connection, text: &Text, verdict: &Verdict) -> rusqlite::Resu
             params![text.hash, it, verdict, now],
         )
     };
-    let (new, why) = match verdict {
+    let (new, why, author) = match verdict {
         Verdict::Ok => return mark(&text.it, "ok").map(|_| 0),
         Verdict::Refused(_) => return mark(&text.it, "refused").map(|_| 0),
-        Verdict::Fixed { it, why } => (it, why),
+        Verdict::Fixed { it, why, by_hand } => (it, why, if *by_hand { crate::priority::BY_HAND } else { AUTHOR }),
     };
     let ids: Vec<i64> = {
         let mut stmt = con.prepare_cached(&format!(
@@ -243,14 +245,14 @@ pub fn apply(con: &Connection, text: &Text, verdict: &Verdict) -> rusqlite::Resu
         con.execute(
             "INSERT INTO history (id, hash, it, status, author, at, replaced_by, replaced_at)
              SELECT id, hash, it, status, author, at, ?3, ?4 FROM translations WHERE id = ?1 AND hash = ?2",
-            params![id, text.hash, AUTHOR, now],
+            params![id, text.hash, author, now],
         )?;
         // Each row its own seq, as upsert.sql does: an addon's pull may stop between two.
         con.execute(
             "UPDATE translations SET it = ?3, at = ?4, status = 'auto', author = ?5, trust = 1,
                  seq = (SELECT coalesce(max(seq), 0) FROM translations) + 1
              WHERE id = ?1 AND hash = ?2",
-            params![id, text.hash, markup::straight_quotes(&new), now, AUTHOR],
+            params![id, text.hash, markup::straight_quotes(&new), now, author],
         )?;
     }
     con.execute(
@@ -293,7 +295,7 @@ pub fn run(con: &Connection, model: &Ask, max: usize, dry_run: bool) -> rusqlite
             let Some(verdict) = verdict else { continue };
             match &verdict {
                 Verdict::Ok => report.ok += 1,
-                Verdict::Fixed { it, why } => {
+                Verdict::Fixed { it, why, .. } => {
                     report.fixed += 1;
                     println!("review: {:?}\n    {:?}\n -> {:?}\n    ({why})", text.en, text.it, it);
                 }
@@ -377,10 +379,22 @@ mod tests {
         // And a fix for a text it shares with another row only reaches the rows it may.
         con.execute("UPDATE translations SET author = 'consistency' WHERE id = 1", []).unwrap();
         let text = Text { hash: "a".into(), en: "Maximum Boon Scaling".into(), it: "Scala massima del Boon".into() };
-        let fix = Verdict::Fixed { it: "Boon massimi conteggiati".into(), why: "x".into() };
+        let fix = Verdict::Fixed { it: "Boon massimi conteggiati".into(), why: "x".into(), by_hand: false };
         assert_eq!(apply(&con, &text, &fix).unwrap(), 1);
         assert_eq!(it(&con, 1), "Scala massima del Boon");
         assert_eq!(it(&con, 2), "Boon massimi conteggiati");
+    }
+
+    #[test]
+    fn a_fix_by_hand_is_written_as_byhand_and_not_reviewed_again() {
+        let con = db();
+        let text = Text { hash: "c".into(), en: "Gain 5 Armor.".into(), it: "Ottieni 5 Armatura.".into() };
+        let fix = Verdict::Fixed { it: "Ottieni 5 di armatura.".into(), why: "x".into(), by_hand: true };
+        assert_eq!(apply(&con, &text, &fix).unwrap(), 1);
+        let (author, trust): (String, i64) = con.query_row("SELECT author, trust FROM translations WHERE id = 4", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((author.as_str(), trust), ("byhand", 1));
+        con.execute("DELETE FROM reviewed", []).unwrap();
+        assert!(pending(&con, 100).unwrap().iter().all(|t| t.hash != "c"));
     }
 
     #[test]

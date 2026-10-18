@@ -520,7 +520,7 @@ fn review_in_background(app: &App, chain: &Chain, daily: usize) {
             let mut fixed = 0;
             for (text, verdict) in texts.iter().zip(&verdicts) {
                 match verdict {
-                    Some(verdict @ review::Verdict::Fixed { it, why }) => {
+                    Some(verdict @ review::Verdict::Fixed { it, why, .. }) => {
                         eprintln!("review: {:?} -> {:?} ({why})", text.it, it);
                         fixed += review::apply(&db, text, verdict)?;
                     }
