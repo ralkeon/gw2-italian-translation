@@ -325,6 +325,37 @@ pub const TERMS: &[(&str, &[&str])] = &[
     ("Concentration", &["concentration"]),
     ("Expertise", &["expertise"]),
     ("Agony Resistance", &["agony resistance"]),
+    // The boons and conditions by name, also where the English writes them in lowercase ("grant
+    // might" is "conferisci Might"): the verbs stay Italian (chill, cripple, blind, poison).
+    ("Aegis", &["aegis"]),
+    ("Alacrity", &["alacrity"]),
+    ("Fury", &["fury"]),
+    ("Might", &["might"]),
+    ("Protection", &["protection"]),
+    ("Quickness", &["quickness"]),
+    ("Regeneration", &["regeneration"]),
+    ("Resistance", &["resistance"]),
+    ("Resolution", &["resolution"]),
+    ("Stability", &["stability"]),
+    ("Swiftness", &["swiftness"]),
+    ("Vigor", &["vigor"]),
+    ("Superspeed", &["superspeed"]),
+    ("Bleeding", &["bleeding"]),
+    ("Blinded", &["blinded", "blindness"]),
+    ("Burning", &["burning"]),
+    ("Chilled", &["chilled"]),
+    ("Confusion", &["confusion"]),
+    ("Crippled", &["crippled"]),
+    ("Fear", &["fear"]),
+    ("Immobile", &["immobile", "immobilized"]),
+    ("Poisoned", &["poisoned", "poison"]),
+    ("Slow", &["slow"]),
+    ("Taunt", &["taunt"]),
+    ("Torment", &["torment"]),
+    ("Vulnerability", &["vulnerability"]),
+    ("Weakness", &["weakness"]),
+    ("Knockback", &["knockback", "knockbacks"]),
+    ("Knockdown", &["knockdown", "knockdowns"]),
 ];
 
 /// Whether `s` has one of `forms` (one word or more, in a row) as words, in any case.
@@ -341,10 +372,11 @@ pub fn terms_missing(en: &str, it: &str) -> Vec<&'static str> {
     TERMS.iter().filter(|(_, forms)| has_word(en, forms) && !has_word(it, forms)).map(|(term, _)| *term).collect()
 }
 
-/// Whether `it` elides into a term ("l'boon", "dell'condition"): none of them starts with a vowel.
+/// Whether `it` elides into a term ("l'boon", "dell'condition"). The boons that start with a vowel
+/// elide as Italian words do ("dell'Aegis").
 pub fn term_elided(it: &str) -> bool {
     let lower = it.to_lowercase();
-    TERMS.iter().any(|(term, _)| {
+    TERMS.iter().filter(|(term, _)| !["Aegis", "Alacrity", "Immobile"].contains(term)).any(|(term, _)| {
         let term = term.to_lowercase();
         lower.contains(&format!("'{term}")) || lower.contains(&format!("’{term}"))
     })
@@ -401,7 +433,7 @@ mod tests {
         assert_eq!(terms_missing("Barrier per Boon", "Barriera per benedizione"), ["boon"]);
         assert!(terms_missing("Barrier per Boon", "Barriera per boon").is_empty());
         assert_eq!(terms_missing("Removes boons and conditions.", "Rimuove i boon e le condizioni."), ["condition"]);
-        assert!(terms_missing("Gain Might.", "Ottieni potenza.").is_empty());
+        assert_eq!(terms_missing("Gain Might.", "Ottieni potenza."), ["Might"]);
         // A word that only starts like one is another word.
         assert!(terms_missing("Boonless foes", "Nemici").is_empty());
         assert!(term_elided("Rimuove l'boon"));
@@ -505,6 +537,11 @@ mod tests {
         assert_eq!(terms_missing("Equip a sigil.", "Equipaggia un sigillo."), ["sigil"]);
         assert!(terms_missing("Salvage the runes.", "Ricicla le rune.").is_empty());
         assert_eq!(terms_missing("Relics grant bonuses.", "Le reliquie conferiscono bonus."), ["relic"]);
+        // Boons and conditions by name, also in lowercase; the verbs stay Italian.
+        assert_eq!(terms_missing("Grant might and inflict bleeding.", "Conferisci potenza e infliggi sanguinamento."), ["Might", "Bleeding"]);
+        assert!(terms_missing("Grant might and inflict bleeding.", "Conferisci Might e infliggi Bleeding.").is_empty());
+        assert!(terms_missing("Chill and cripple foes.", "Assidera e azzoppa i nemici.").is_empty());
+        assert!(!term_elided("Conferisci 3 secondi dell'Aegis."));
     }
 
     #[test]

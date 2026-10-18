@@ -38,6 +38,17 @@ belongs in the Italian sentence: they stand for numbers, names, colours and line
 clear for interface labels, buttons and item names.
 - Names of characters, places, races and factions (Tyria, Lion's Arch, Inquest, Asura...) stay \
 in English.
+- The words of the game's mechanics stay in English, as Italian players say them: the names of \
+skills, traits, specializations, professions and mounts; the skill types and labels (Glamour, \
+Signet, Shatter, Mantra, Trap...); the boons and conditions by name, capitalised, also where the \
+English writes them in lowercase (\"grant might\" is \"conferisci Might\", \"inflict bleeding\" is \
+\"infliggi Bleeding\"; Fury, Quickness, Swiftness, Aegis, Burning, Vulnerability, Weakness...); \
+Stun, Daze, Knockback, Knockdown, Fear, Taunt as names and in lists; the attributes (Power, \
+Precision, Toughness, Vitality, Ferocity, Healing Power, Condition Damage...); \"boon\", \
+\"condition\", \"rune\", \"sigil\", \"relic\", \"focus\" (the weapon) as loanwords, never elided \
+(\"il boon\", \"della condition\"). The verbs stay Italian (\"chill\" assiderare, \"cripple\" \
+azzoppare, \"stun\" stordire, \"daze\" disorientare). A stat prefix (Berserker's, Carrion) goes \
+after the Italian noun, without \"'s\" (\"Spadone Berserker\").
 - Translate the same term the same way across the texts.
 ";
 
