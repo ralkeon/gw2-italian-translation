@@ -170,9 +170,16 @@ pub fn run(
     let entries = load(con)?;
     let found = consistency::groups(&entries);
     report.groups = found.len();
+    // Only the words that are a name of one word kept in English (`english_names`: "Seraph",
+    // "Lionguard"): the model alone took common words for names ("River Otter" became "Otter di
+    // fiume", "Heart of Thorns" "Cuore di Thorn").
+    let known_names: std::collections::HashSet<String> = {
+        let mut stmt = con.prepare("SELECT lower(name) FROM english_names WHERE name NOT LIKE '% %'")?;
+        stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+    };
     // Not settled yet, or changed since.
     let mut open = Vec::new();
-    for group in found {
+    for group in found.into_iter().filter(|g| known_names.contains(&g.word)) {
         let known: Option<String> =
             con.query_row("SELECT signature FROM consistency_state WHERE word = ?1", [&group.word], |r| r.get(0)).optional()?;
         if known.as_deref() != Some(group.signature().as_str()) {
@@ -415,6 +422,8 @@ mod tests {
         let con = Connection::open_in_memory().unwrap();
         con.execute_batch(include_str!("../../../server/schema.sql")).unwrap();
         con.execute_batch(SCHEMA).unwrap();
+        con.execute_batch(crate::names::SCHEMA).unwrap();
+        con.execute_batch("INSERT INTO english_names (name, kind, added) VALUES ('Seraph', 'imported', 1)").unwrap();
         con.execute_batch(
             "INSERT INTO translations (id, hash, en, it, status, author, at, seq, trust) VALUES
                (1, '0000000000000001', 'Seraph Guard', 'Guardia dei Serafini', 'manual', 'Ana', 1, 1, 3),
