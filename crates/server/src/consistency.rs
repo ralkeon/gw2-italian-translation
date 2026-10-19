@@ -170,11 +170,12 @@ pub fn run(
     let entries = load(con)?;
     let found = consistency::groups(&entries);
     report.groups = found.len();
-    // Only the words that are a name of one word kept in English (`english_names`: "Seraph",
-    // "Lionguard"): the model alone took common words for names ("River Otter" became "Otter di
+    // Only the words that are a name of one word kept in English, a faction, a place, a creature
+    // (`english_names` of kind imported: "Seraph", the specializations are adjectives too:
+    // "Untamed Crags"): the model alone took common words for names ("River Otter" became "Otter di
     // fiume", "Heart of Thorns" "Cuore di Thorn").
     let known_names: std::collections::HashSet<String> = {
-        let mut stmt = con.prepare("SELECT lower(name) FROM english_names WHERE name NOT LIKE '% %'")?;
+        let mut stmt = con.prepare("SELECT lower(name) FROM english_names WHERE kind = 'imported' AND name NOT LIKE '% %'")?;
         stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
     };
     // Not settled yet, or changed since.
