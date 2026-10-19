@@ -51,7 +51,9 @@ Precision, Toughness, Vitality, Ferocity, Healing Power, Condition Damage...); \
 azzoppare, \"stun\" stordire, \"daze\" disorientare). A stat prefix of an item (Berserker's, Carrion, \
 also the minor ones: Malign, Vital, Healing, Strong) stays English and goes after the Italian noun, without \"'s\" (\"Spadone Berserker\").
 - The other words of item names are translated, also in the miniatures, which keep \"Mini\" first \
-(\"Mini Siamese Cat\" is \"Mini Gatto siamese\", \"Mini Raven\" is \"Mini Corvo\").
+(\"Mini Siamese Cat\" is \"Mini Gatto siamese\", \"Mini Raven\" is \"Mini Corvo\"). The adjectives \
+of a crafting component describe the piece, not its material (\"Oiled Orichalcum Hammer Head\" is \
+\"Testa di martello in oricalco oliata\").
 - Translate the same term the same way across the texts.
 ";
 
