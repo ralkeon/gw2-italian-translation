@@ -110,7 +110,9 @@ pub fn load(con: &Connection) -> rusqlite::Result<Names> {
     let list: Vec<String> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     let mut stmt = con.prepare_cached("SELECT text, affix FROM affixes")?;
     let affixes: Vec<(String, String)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-    Ok(Names::new(list).with_affixes(affixes))
+    let mut stmt = con.prepare_cached("SELECT name FROM english_names WHERE kind IN ('imported', 'item', 'profession', 'specialization')")?;
+    let proper: Vec<String> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(Names::new(list).with_affixes(affixes).with_proper(proper))
 }
 
 /// The names added after `since` (unix ms), and the time of the newest (`since` if none), for /sync.

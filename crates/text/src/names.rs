@@ -15,7 +15,7 @@
 //! One-word names that are plain English words (Fire, Charge, Escape...) are left out: the same
 //! text is often something else in the game.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// One-word names that are common English: as a whole text they are often a label, a damage type,
 /// a key, an achievement, not the skill.
@@ -65,6 +65,9 @@ pub struct Names {
     /// Silk Insignia"), with the prefix: it stays in English, without the "'s" and the same in the
     /// plural, after the Italian noun ("Insegna in seta Berserker").
     affixed: HashMap<String, String>,
+    /// The names kept also inside a title ("Daily Thunderhead Peaks Renown Heart"): places,
+    /// factions, specializations, legendary items; not the skills, which items are named after.
+    proper: HashSet<String>,
 }
 
 /// A word of a text: letters, digits and the apostrophes, hyphens and dots inside a name.
@@ -140,12 +143,18 @@ impl Names {
         for list in by_first.values_mut() {
             list.sort_by_key(|n| std::cmp::Reverse(n.len()));
         }
-        Self { by_first, affixed: HashMap::new() }
+        Self { by_first, affixed: HashMap::new(), proper: HashSet::new() }
     }
 
     /// With the stat prefixes: `list` has (a prefix or an item named after one, the prefix).
     pub fn with_affixes<I: IntoIterator<Item = (S, S)>, S: AsRef<str>>(mut self, list: I) -> Self {
         self.affixed = list.into_iter().map(|(text, affix)| (text.as_ref().trim().to_owned(), affix.as_ref().trim().to_owned())).collect();
+        self
+    }
+
+    /// With the names of more words kept also inside a title (`proper`).
+    pub fn with_proper<I: IntoIterator<Item = S>, S: AsRef<str>>(mut self, list: I) -> Self {
+        self.proper = list.into_iter().map(|n| n.as_ref().trim().to_owned()).filter(|n| n.contains(' ')).collect();
         self
     }
 
@@ -227,7 +236,7 @@ impl Names {
             // Nothing but spaces between it and the punctuation or the ends of the text.
             let isolated = s[..w.start].trim_end().chars().next_back().is_none_or(|c| !is_word_char(c))
                 && s[end..].trim_start().chars().next().is_none_or(|c| !is_word_char(c));
-            let keep = alone || name.contains(' ') && (!title || isolated) || {
+            let keep = alone || name.contains(' ') && (!title || isolated || self.proper.contains(name)) || {
                 let neighbour = |k: Option<usize>, step: isize| -> bool {
                     // The next word on that side, past one joiner: capitalised means a longer title
                     // ("Gift of Might"), but right next to it the first word of a sentence does not
@@ -587,6 +596,16 @@ mod tests {
         assert!(terms_missing("+100 Healing Power", "+100 Healing Power").is_empty());
         assert_eq!(terms_missing("Gain ferocity based on your power.", "Ottieni ferocia in base al tuo Power."), ["Ferocity"]);
         assert!(term_elided("Aumenta l'Expertise"));
+    }
+
+    #[test]
+    fn proper_names_in_titles() {
+        let n = Names::new(["Thunderhead Peaks", "Arcane Shield"]);
+        let title = "Daily Thunderhead Peaks Renown Heart Completionist";
+        assert!(n.missing(title, "Cuore di fama giornaliero dei Picchi di Thunderhead").is_empty());
+        let n = n.with_proper(["Thunderhead Peaks"]);
+        assert_eq!(n.missing(title, "Cuore di fama giornaliero dei Picchi di Thunderhead"), ["Thunderhead Peaks"]);
+        assert!(n.missing("Arcane Shield Rune Pack", "Pacchetto di rune dello scudo arcano").is_empty());
     }
 
     #[test]
