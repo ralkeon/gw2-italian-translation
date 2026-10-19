@@ -430,7 +430,7 @@ fn generic_power(s: &str) -> String {
         let (before, after) = (lower[..at].trim_end(), lower[at + 5..].trim_start());
         let generic = before.ends_with(" the") || before == "the" || before.ends_with(" of")
             || ["'s", "’s", " his", " her", " its", " their"].iter().any(|w| before.ends_with(w))
-            || ["of ", "to ", "in ", "into ", "from "].iter().any(|w| after.starts_with(w));
+            || after.split(|c: char| !c.is_alphanumeric()).next().is_some_and(|w| ["of", "to", "in", "into", "from"].contains(&w));
         if generic && !before.ends_with("healing") {
             out.replace_range(at..at + 5, "_____");
         }
@@ -614,6 +614,7 @@ mod tests {
         assert!(terms_missing(kuda, "Io vi guiderò e trasformerò questo momento di debolezza in uno di forza.").is_empty());
         assert!(terms_missing("Prepare to accept the wizard's power.", "Preparati ad accettare il potere del mago.").is_empty());
         assert!(terms_missing("Channel power to your Spirit of Wanderlust.", "Incanala potere nel tuo Spirit of Wanderlust.").is_empty());
+        assert!(terms_missing("The forge will grant you power in: %str1%", "La fucina ti conferirà potere in: %str1%").is_empty());
         assert_eq!(terms_missing("Gain power while in fire attunement.", "Ottieni potenza."), ["Power"]);
         assert!(terms_missing("<c=@flavor>Seal away your fear.</c>", "<c=@flavor>Sigilla la tua paura.</c>").is_empty());
         let spec = "\"My power shapes the world.\"\n\nGain might.";
