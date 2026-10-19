@@ -16,6 +16,7 @@ pub fn render(ui: &Ui) {
     };
     let c = edit.get_or_insert_with(config::get);
 
+    ui.text_disabled(concat!("Italian Translation v", env!("CARGO_PKG_VERSION")));
     ui.text_wrapped(
         "Traduttori, nell'ordine in cui vengono usati: quando uno finisce la quota o non risponde \
          si passa al successivo, e si torna al primo appena è di nuovo disponibile. Tutte le chiavi \
