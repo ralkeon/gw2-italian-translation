@@ -369,9 +369,64 @@ fn has_word(s: &str, forms: &[&str]) -> bool {
     })
 }
 
-/// The terms (`TERMS`) `en` has that `it` lost.
+/// The terms (`TERMS`) `en` has that `it` lost. The prose is left out: the flavour text, the
+/// words in quotes and the texts someone says or writes ("I", "my", "we"), where "power",
+/// "weakness" or "a boon" are plain words, not the mechanic; but for the upgrades and Black Lion.
+/// "the power of", "power to", "the wizard's power" are never the attribute.
 pub fn terms_missing(en: &str, it: &str) -> Vec<&'static str> {
-    TERMS.iter().filter(|(_, forms)| has_word(en, forms) && !has_word(it, forms)).map(|(term, _)| *term).collect()
+    let mechanics = mechanics_part(en);
+    let spoken = words(&mechanics).iter().any(|w| SPOKEN.contains(&w.text));
+    TERMS
+        .iter()
+        .filter(|(term, _)| !spoken || ALWAYS_TERMS.contains(term))
+        .filter(|(term, forms)| {
+            let found = if *term == "Power" { has_word(&generic_power(&mechanics), forms) } else { has_word(&mechanics, forms) };
+            found && !has_word(it, forms)
+        })
+        .map(|(term, _)| *term)
+        .collect()
+}
+
+/// The terms that are the game's even in prose.
+const ALWAYS_TERMS: &[&str] = &["Black Lion", "rune", "sigil", "relic", "Agony Resistance", "Healing Power"];
+/// The words of someone speaking or writing.
+const SPOKEN: &[&str] = &["I", "I'm", "I'll", "I've", "I'd", "me", "my", "mine", "we", "we're", "we'll", "we've", "our", "us", "I’m", "I’ll", "I’ve", "I’d", "we’re"];
+
+/// `en` without the flavour text (`<c=@flavor>...</c>`) and the words in quotes.
+fn mechanics_part(en: &str) -> String {
+    let mut out = String::with_capacity(en.len());
+    let mut rest = en;
+    while let Some(at) = rest.find("<c=@flavor>") {
+        out.push_str(&rest[..at]);
+        rest = rest[at..].find("</c>").map_or("", |end| &rest[at + end + 4..]);
+    }
+    out.push_str(rest);
+    let mut bare = String::with_capacity(out.len());
+    let mut quoted = false;
+    for c in out.chars() {
+        match c {
+            '"' | '“' | '”' => quoted = !quoted,
+            _ if !quoted => bare.push(c),
+            _ => {}
+        }
+    }
+    bare
+}
+
+/// `s` without "power" where it is not the attribute: "the power of", "power to", "power in".
+fn generic_power(s: &str) -> String {
+    let lower = s.to_lowercase();
+    let mut out = s.to_owned();
+    for (at, _) in lower.match_indices("power").collect::<Vec<_>>().into_iter().rev() {
+        let (before, after) = (lower[..at].trim_end(), lower[at + 5..].trim_start());
+        let generic = before.ends_with(" the") || before == "the" || before.ends_with(" of")
+            || ["'s", "’s", " his", " her", " its", " their"].iter().any(|w| before.ends_with(w))
+            || ["of ", "to ", "in ", "into ", "from "].iter().any(|w| after.starts_with(w));
+        if generic && !before.ends_with("healing") {
+            out.replace_range(at..at + 5, "_____");
+        }
+    }
+    out
 }
 
 /// Whether `it` elides into a term ("l'boon", "dell'condition"). The boons that start with a vowel
@@ -532,6 +587,19 @@ mod tests {
         assert!(terms_missing("+100 Healing Power", "+100 Healing Power").is_empty());
         assert_eq!(terms_missing("Gain ferocity based on your power.", "Ottieni ferocia in base al tuo Power."), ["Ferocity"]);
         assert!(term_elided("Aumenta l'Expertise"));
+    }
+
+    #[test]
+    fn prose_has_no_terms() {
+        let kuda = "I, Director Kuda, will lead you forward and turn this moment of weakness into one of might.";
+        assert!(terms_missing(kuda, "Io vi guiderò e trasformerò questo momento di debolezza in uno di forza.").is_empty());
+        assert!(terms_missing("Prepare to accept the wizard's power.", "Preparati ad accettare il potere del mago.").is_empty());
+        assert!(terms_missing("Channel power to your Spirit of Wanderlust.", "Incanala potere nel tuo Spirit of Wanderlust.").is_empty());
+        assert_eq!(terms_missing("Gain power while in fire attunement.", "Ottieni potenza."), ["Power"]);
+        assert!(terms_missing("<c=@flavor>Seal away your fear.</c>", "<c=@flavor>Sigilla la tua paura.</c>").is_empty());
+        let spec = "\"My power shapes the world.\"\n\nGain might.";
+        assert_eq!(terms_missing(spec, "«Il mio potere plasma il mondo.»\n\nOttieni potenza."), ["Might"]);
+        assert_eq!(terms_missing("I found a superior rune.", "Ho trovato una runa superiore."), ["rune"]);
     }
 
     #[test]
