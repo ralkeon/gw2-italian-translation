@@ -4,7 +4,8 @@
 //!   the professions, traits, legendary weapons, armour, backs and trinkets, the runes, sigils
 //!   and relics; boons and conditions are added here. A name, once known, stays (the API drops
 //!   skills it retires). Into `affixes` go the stat prefixes of three attributes or more
-//!   ("Berserker's") and the items named after one ("Berserker's Silk Insignia"): the prefix
+//!   ("Berserker's") and the items named after any prefix, the minor ones too ("Malign Silk
+//!   Insignia", "Berserker's Silk Insignia"): the prefix
 //!   stays in English, the item's noun is Italian ("Insegna in seta Berserker").
 //! - Then the machine translations (trust 1 and below) that lost a name get it back: a text that
 //!   is the name becomes the name; in any other a language model of translators.json puts the
@@ -191,16 +192,20 @@ fn from_api() -> Result<FromApi, String> {
     for v in all(&agent, "traits")? {
         out.push((name(&v), "trait"));
     }
-    // The prefixes of three attributes or more: the minor ones ("Mighty") are plain adjectives.
+    // All the prefixes name items ("Malign Silk Insignia"), but alone only those of three attributes
+    // or more: the minor ones alone ("Healing", "Vital") are plain words.
     let mut stats = std::collections::HashMap::new();
+    let mut affixes: Vec<(String, String)> = Vec::new();
     for v in all(&agent, "itemstats")? {
         let affix = name(&v);
-        let simple = !affix.contains(" and ") && usable(&affix);
-        if simple && v["attributes"].as_array().is_some_and(|a| a.len() >= 3) {
-            stats.insert(v["id"].as_i64().unwrap_or(-1), affix);
+        if affix.contains(" and ") || !usable(&affix) {
+            continue;
         }
+        if v["attributes"].as_array().is_some_and(|a| a.len() >= 3) && !affixes.iter().any(|(a, _)| *a == affix) {
+            affixes.push((affix.clone(), affix.clone()));
+        }
+        stats.insert(v["id"].as_i64().unwrap_or(-1), affix);
     }
-    let mut affixes: Vec<(String, String)> = stats.values().map(|a| (a.clone(), a.clone())).collect();
     for v in all(&agent, "items")? {
         let kind = v["type"].as_str().unwrap_or("");
         let item = name(&v);
