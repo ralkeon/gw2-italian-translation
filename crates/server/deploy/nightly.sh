@@ -16,8 +16,7 @@ while pgrep -f "^[^ ]*gw2it-server (names|consistency|plurals)" > /dev/null; do 
 echo "=== $(date)" >> names.log
 ./gw2it-server names --db data/gw2it.db --fetch --translators translators.json >> names.log 2>&1
 echo "=== $(date)" >> consistency.log
-# TEMP --include-manual: until the backlog of hand corrections is done
-./gw2it-server consistency --db data/gw2it.db --translators translators.json --include-manual --max-groups 200 >> consistency.log 2>&1
+./gw2it-server consistency --db data/gw2it.db --translators translators.json --max-groups 200 >> consistency.log 2>&1
 echo "=== $(date)" >> plurals.log
 ./gw2it-server plurals --db data/gw2it.db --translators translators.json --max-texts 1500 >> plurals.log 2>&1
 ./gw2it-server replicate --db data/gw2it.db --to https://gw2it-sync.gw2it-sync.workers.dev --key-file replica.key >> replicate.log 2>&1
