@@ -15,6 +15,8 @@
 //! gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
 //!                                                                         (see review.rs)
 //! gw2it-server review|plurals ... --ask-to <file> | --answers <file>   (no model: by hand, see byhand.rs)
+//! gw2it-server bulk [--db gw2it.db] --file texts.jsonl --translators translators.json [--max-texts N] [--dry-run]
+//!                                                                         (see bulk.rs)
 
 use std::{
     collections::HashMap,
@@ -31,6 +33,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tiny_http::{Header, Method, Request, Response, Server};
 
+mod bulk;
 mod consistency;
 mod glossary;
 mod names;
@@ -104,7 +107,8 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server plurals [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
        gw2it-server review|plurals [--db gw2it.db] (--ask-to <file> | --answers <file>) [--max-texts 200] [--dry-run]
        gw2it-server import-glossary --file glossary_it.json [--excluded glossary-import-excluded.json] [--db gw2it.db] [--dry-run]
-       gw2it-server repair [--db gw2it.db] [--dry-run]";
+       gw2it-server repair [--db gw2it.db] [--dry-run]
+       gw2it-server bulk [--db gw2it.db] --file texts.jsonl --translators translators.json [--max-texts N] [--dry-run]";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -115,7 +119,8 @@ fn main() {
     let plurals = args.first().is_some_and(|a| a == "plurals");
     let import = args.first().is_some_and(|a| a == "import-glossary");
     let repair = args.first().is_some_and(|a| a == "repair");
-    if replicate || consistency || english_names || review || plurals || import || repair {
+    let bulk = args.first().is_some_and(|a| a == "bulk");
+    if replicate || consistency || english_names || review || plurals || import || repair || bulk {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -182,6 +187,15 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        return;
+    }
+    if bulk {
+        let (Some(file), Some(translators_file)) = (options.remove("--file"), options.remove("--translators")) else {
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        };
+        let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(usize::MAX);
+        run_bulk(&db, &file, &translators_file, max_texts, dry_run);
         return;
     }
     if import {
@@ -461,6 +475,34 @@ fn run_import_glossary(db: &str, file: &str, excluded_file: Option<&str>, dry_ru
         Ok((names, terms)) => println!("import-glossary: {names} names added, {terms} glossary terms changed"),
         Err(e) => {
             eprintln!("import-glossary: database: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// The texts of a file translated ahead (bulk.rs), with the language models first.
+fn run_bulk(db: &str, file: &str, translators_file: &str, max_texts: usize, dry_run: bool) {
+    let con = open(db).unwrap_or_else(|e| {
+        eprintln!("cannot open {db}: {e}");
+        std::process::exit(1);
+    });
+    let mut chain = Chain::default();
+    chain.set(bulk::order(translators(translators_file)));
+    match bulk::run(&con, &chain, file, &bulk::Options { max_texts, dry_run }) {
+        Ok(r) => println!(
+            "bulk: {} texts, {} known, {} names, {} copied, {} with nothing to translate, {} translated, {} rejected{}{}",
+            r.read,
+            r.known,
+            r.names,
+            r.copied,
+            r.nothing,
+            r.translated,
+            r.rejected,
+            if dry_run { " (dry run: nothing changed)" } else { "" },
+            r.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),
+        ),
+        Err(e) => {
+            eprintln!("bulk: {e}");
             std::process::exit(1);
         }
     }
