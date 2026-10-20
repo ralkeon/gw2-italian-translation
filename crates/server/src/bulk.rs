@@ -111,7 +111,8 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
             continue;
         }
         let same: Option<String> = con
-            .query_row("SELECT it FROM translations WHERE hash = ?1 ORDER BY trust DESC, seq LIMIT 1", [&text.hash], |r| r.get(0))
+            // The strongest, and among those the last changed: the one the jobs corrected.
+            .query_row("SELECT it FROM translations WHERE hash = ?1 ORDER BY trust DESC, seq DESC LIMIT 1", [&text.hash], |r| r.get(0))
             .optional()
             .map_err(db)?;
         if let Some(it) = same {
