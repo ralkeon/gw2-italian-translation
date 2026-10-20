@@ -8,8 +8,10 @@
 cd "$HOME/gw2it-sync" || exit 1
 exec 9> nightly.lock
 flock -n 9 || { echo "$(date): nightly already running" >> nightly.log; exit 0; }
-# A job started by hand (a long names run) finishes first.
-while pgrep -f "gw2it-server (names|consistency|plurals)" > /dev/null; do sleep 60; done
+# A job started by hand (a long names run) finishes first. The pattern starts the command line: a
+# shell that only names the job (a watcher waiting on it) is not the job, and it once held the
+# night here for a whole day.
+while pgrep -f "^[^ ]*gw2it-server (names|consistency|plurals)" > /dev/null; do sleep 60; done
 
 echo "=== $(date)" >> names.log
 ./gw2it-server names --db data/gw2it.db --fetch --translators translators.json >> names.log 2>&1
