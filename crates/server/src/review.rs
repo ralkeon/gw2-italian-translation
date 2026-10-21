@@ -78,6 +78,10 @@ Some English must stay as it is, so that players can talk with players of other 
 - \"keep\": names of skills, traits, specializations, professions, legendary items, runes, sigils, relics, stat prefixes, boons and conditions. \
 Each must be in the Italian exactly as written in the English; fix only the words right around it \
 (\"l'Elisir B\" becomes \"l'Elixir B\").
+- The article or preposition before an English name follows its first letter as if it were Italian: \
+elided before a vowel (\"dell'Ash Legion\", \"nell'Echovald Forest\", \"all'Auric Basin\"), \"lo\" before \
+s + consonant or z (\"dello Skyscale\", \"allo Zephyr Sanctum\"), \"di\" before \"The\" (\"Manuale di The \
+Shining Blade\"). \"della Ash Legion\" or \"del Skyscale\" is a mistake to fix.
 - The lowercase words in \"keep\" are words of the game's mechanics: \"boon\" (benedizione, vantaggio) and \
 \"condition\" (condizione, alterazione). Use the English word as an Italian loanword: it does not change \
 in the plural (\"i boon\", \"le condition\"; \"boon\" is masculine, \"condition\" feminine), it is lowercase \

@@ -37,7 +37,10 @@ belongs in the Italian sentence: they stand for numbers, names, colours and line
 - Natural Italian, as in a video game: informal (tu) when talking to the player, short and \
 clear for interface labels, buttons and item names.
 - Names of characters, places, races and factions (Tyria, Lion's Arch, Inquest, Asura...) stay \
-in English.
+in English. The article or preposition before an English name follows its first letter as if it \
+were Italian: elided before a vowel (\"dell'Ash Legion\", \"nell'Echovald Forest\", \"all'Auric \
+Basin\"), \"lo\" before s + consonant or z (\"dello Skyscale\", \"allo Zephyr Sanctum\"), \"di\" \
+before \"The\" (\"Manuale di The Shining Blade\").
 - The words of the game's mechanics stay in English, as Italian players say them: the names of \
 skills, traits, specializations, professions and mounts; the skill types and labels (Glamour, \
 Signet, Shatter, Mantra, Trap...); the boons and conditions by name, capitalised, also where the \
