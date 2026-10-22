@@ -103,7 +103,9 @@ Basin\"), \"lo\" before s + consonant or z (\"dello Skyscale\", \"allo Zephyr Sa
 (\"Manuale di The Shining Blade\"); the gender stays the one the Italian gave it. Do not translate anything again, do not change the rest. Keep every %token%, \
 every <tag>, every [tag] and every line break exactly as they are.
 
-The lowercase words in \"keep\" are words of the game's mechanics: \"boon\" (benedizione, vantaggio) and \"condition\" (condizione, alterazione). Use the English word wherever the Italian translated it, as an Italian loanword: it does not change in the plural (\"i boon\", \"le condition\"; \"boon\" is masculine, \"condition\" feminine), it is lowercase in a sentence and capitalised in a title or label (\"Barriera per Boon\"), and it is never elided (\"il boon\", \"della condition\", never \"l'boon\"). The attributes \"Condition Damage\", \"Condition Duration\" and \"Boon Duration\" stay whole in English (\"+100 Condition Damage\"). \"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". The attributes in \"keep\" (Power, Precision, Toughness, Vitality, Ferocity, Healing Power, Concentration, Expertise, Agony Resistance) stay in English, capitalised, never elided (\"+100 Power\", \"in base al tuo Power\", \"della Ferocity\"), never \"potenza\", \"precisione\", \"robustezza\", \"vitalità\", \"ferocia\". The boons and conditions in \"keep\" (Might, Fury, Quickness, Bleeding, Burning, Vulnerability...) and Knockback, Knockdown stay in English, capitalised, also where the English writes them in lowercase in a sentence (\"grant might\" is \"conferisci Might\", \"inflict bleeding\" is \"infliggi Bleeding\"), never elided except the ones starting with a vowel (\"dell'Aegis\"); the verbs stay Italian (\"chill\" assiderare, \"cripple\" azzoppare, \"blind\" accecare, \"poison\" avvelenare). Nothing else goes back to English; the skill types and labels in <c=@abilitytype> (\"Glamour.\", \"Signet Passive:\") stay in English, as the English has them. \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: they stay in English as Italian loanwords, the same in the plural (\"la rune\", \"le rune\", \"il sigil\", \"i sigil\", \"la relic\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\". A stat prefix in \"keep\" (\"Berserker\", \"Carrion\", \"Knight\") stays in English without the \"'s\", after the Italian noun, with no article or preposition and the same in the plural (\"Insegna in seta Berserker\", \"Spadone di perla Carrion\", \"Cappotto esaltato Knight\"), never \"del Berserker\" or \"della Carogna\". A name before the prefix stays after it with \"di\" (\"Beigarth's Knight Insignia\" is \"Insegna Knight di Beigarth\"). If in a text the word is not the mechanic, the weapon, the upgrade or the attribute (\"the power of the gods\") (\"your help was a great boon\", \"in good condition\", \"focus your mind\", \"you might need help\", \"they fear us\"), answer {\"n\": <n>, \"skip\": true} for it instead.
+The lowercase words in \"keep\" are words of the game's mechanics: \"boon\" (benedizione, vantaggio) and \"condition\" (condizione, alterazione). Use the English word wherever the Italian translated it, as an Italian loanword: it does not change in the plural (\"i boon\", \"le condition\"; \"boon\" is masculine, \"condition\" feminine), it is lowercase in a sentence and capitalised in a title or label (\"Barriera per Boon\"), and it is never elided (\"il boon\", \"della condition\", never \"l'boon\"). The attributes \"Condition Damage\", \"Condition Duration\" and \"Boon Duration\" stay whole in English (\"+100 Condition Damage\"). \"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". The attributes in \"keep\" (Power, Precision, Toughness, Vitality, Ferocity, Healing Power, Concentration, Expertise, Agony Resistance) stay in English, capitalised, never elided (\"+100 Power\", \"in base al tuo Power\", \"della Ferocity\"), never \"potenza\", \"precisione\", \"robustezza\", \"vitalità\", \"ferocia\". The boons and conditions in \"keep\" (Might, Fury, Quickness, Bleeding, Burning, Vulnerability...) and Knockback, Knockdown stay in English, capitalised, also where the English writes them in lowercase in a sentence (\"grant might\" is \"conferisci Might\", \"inflict bleeding\" is \"infliggi Bleeding\"), never elided except the ones starting with a vowel (\"dell'Aegis\"); the verbs stay Italian (\"chill\" assiderare, \"cripple\" azzoppare, \"blind\" accecare, \"poison\" avvelenare). Nothing else goes back to English; the skill types and labels in <c=@abilitytype> (\"Glamour.\", \"Signet Passive:\") stay in English, as the English has them. \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: they stay in English as Italian loanwords, the same in the plural (\"la rune\", \"le rune\", \"il sigil\", \"i sigil\", \"la relic\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\". A stat prefix in \"keep\" (\"Berserker\", \"Carrion\", \"Knight\") stays in English without the \"'s\", after the Italian noun, with no article or preposition and the same in the plural (\"Insegna in seta Berserker\", \"Spadone di perla Carrion\", \"Cappotto esaltato Knight\"), never \"del Berserker\" or \"della Carogna\". A name before the prefix stays after it with \"di\" (\"Beigarth's Knight Insignia\" is \"Insegna Knight di Beigarth\").
+
+The words of the mechanics in \"keep\" are also plain English words: put one back only where it is the game's mechanic. A boon or condition is the mechanic where a skill, trait or item grants, inflicts, removes, counts or is about it (\"grant might\", \"inflict bleeding\", \"chilled foes\", \"Might on Hit\", \"Swiftness When Hit\", \"Damage vs. Burning\", \"Vulnerability Duration\"); an attribute where it is the stat (\"+25 Power\", \"gain power\", \"based on your power\"); \"focus\" where it is the weapon; \"rune\", \"sigil\", \"relic\" where they are the upgrades. It is NOT the mechanic, and its Italian stays, in dialogue and story text (\"your might and wits\", \"what real power looks like\", \"the quaggans need protection\", \"under the protection of the Lionguard\", \"show any weakness\", \"follow the fear\", \"killed with precision\", \"extreme concentration\", \"the power of the gods\", \"a great boon\", \"in good condition\"); in the names of things, places and events where the word only describes them (\"Poison Cloud\" Nube di veleno, \"Poisoned Dagger\" Pugnale avvelenato, \"Burning Oil\" olio bollente, \"Power Source\" and \"Power Core\" fonte e nucleo di energia, \"Halla's Fury\" Furia di Halla, \"Electrical Distortion\" distorsione elettrica, \"Ice Protection\"); and where it is a verb or another part of speech (\"slow the spread\", \"burning everything\", \"the sweat burning your eyes\", \"bleeding with miasma\", \"they poison the quaggans\", \"power the golem\", \"stealth into the depths\", \"this might take a while\", \"focus your mind\"). List such words in \"plain\" and leave their Italian as it is: {\"n\": <n>, \"it\": \"<the Italian with the other names put back>\", \"plain\": [\"Power\"]}; when no word of \"keep\" is to be put back, answer {\"n\": <n>, \"skip\": true}. When unsure, leave the Italian: a word left in Italian is a small loss, a broken sentence is not.
 
 Answer with JSON: {\"texts\": [{\"n\": <the text's n>, \"it\": \"<the fixed Italian>\"}]}";
 
@@ -368,17 +370,26 @@ pub fn run(con: &Connection, ask: Option<&Ask>, options: &Options) -> rusqlite::
             };
             let mut fixed = vec![None; chunk.len()];
             let mut skipped = vec![false; chunk.len()];
+            // The words of TERMS the model said are not the mechanic in that text: they stay Italian.
+            let mut plain: Vec<Vec<&str>> = vec![Vec::new(); chunk.len()];
             for t in answer["texts"].as_array().map(Vec::as_slice).unwrap_or_default() {
                 let Some(n) = t["n"].as_u64().map(|n| n as usize).filter(|&n| n < chunk.len()) else { continue };
+                let said: Vec<&str> = t["plain"].as_array().map(Vec::as_slice).unwrap_or_default().iter().filter_map(Value::as_str).collect();
+                let all = t["it"].as_str().is_none() && t["skip"] == true;
+                plain[n] = names::terms_missing(&chunk[n].en, &chunk[n].it).into_iter().filter(|term| all || said.contains(term)).collect();
                 if let Some(it) = t["it"].as_str() {
                     fixed[n] = Some(it.to_owned());
-                } else if t["skip"] == true {
+                } else if all {
                     skipped[n] = true;
                 }
             }
-            for ((row, it), skipped) in chunk.iter().zip(fixed).zip(skipped) {
+            for (((row, it), skipped), plain) in chunk.iter().zip(fixed).zip(skipped).zip(plain) {
+                let wanted = |it: &str| -> Vec<&str> { keep(&names, &row.en, it).into_iter().filter(|k| !plain.contains(k)).collect() };
+                // All of its terms plain: the text stays, as a skip.
+                let skipped = skipped || (!plain.is_empty() && wanted(&row.it).is_empty() && it.as_deref().is_none_or(|it| it == row.it));
+                let it = if skipped { None } else { it };
                 // Only a text whose names are fine may be skipped: the names are no guess.
-                if skipped && it.is_none() && names.missing(&row.en, &row.it).is_empty() {
+                if skipped && names.missing(&row.en, &row.it).iter().all(|name| plain.contains(name)) {
                     report.skipped += 1;
                     eprintln!("names: {} {:?}: not the mechanic, skipped", row.id, row.en);
                     if !options.dry_run {
@@ -393,15 +404,24 @@ pub fn run(con: &Connection, ask: Option<&Ask>, options: &Options) -> rusqlite::
                     *it != row.it
                         && !it.trim().is_empty()
                         && it.chars().count() <= TEXT_MAX
-                        && keep(&names, &row.en, it).is_empty()
+                        && wanted(it).is_empty()
                         && !names::term_elided(it)
-                        && names::english_brought_in(&row.en, &row.it, it, &keep(&names, &row.en, &row.it)).is_empty()
+                        && names::english_brought_in(&row.en, &row.it, it, &wanted(&row.it)).is_empty()
                         && markup::token_mismatch(&row.en, it).is_empty()
                         && elided_well(&names, &row.en, it)
                         && row.it.contains("[pl:") == it.contains("[pl:")
                 });
                 match usable {
-                    Some(it) => done.push((row, it)),
+                    Some(it) => {
+                        // Its plain words are not asked again while the text stays the same.
+                        if !plain.is_empty() && !options.dry_run {
+                            con.execute(
+                                "INSERT OR REPLACE INTO names_skip (id, hash, it) VALUES (?1, ?2, ?3)",
+                                params![row.id, row.hash, markup::straight_quotes(&it)],
+                            )?;
+                        }
+                        done.push((row, it))
+                    }
                     None => {
                         report.failed += 1;
                         eprintln!("names: {} {:?}: no usable fix", row.id, row.en);
@@ -518,6 +538,33 @@ mod tests {
         };
         let report = run(&con, Some(&never), &Options { dry_run: false, max_texts: 10 }).unwrap();
         assert_eq!((report.inside, report.skipped), (1, 0));
+    }
+
+    #[test]
+    fn a_word_that_is_not_the_mechanic_stays_italian_next_to_one_that_is() {
+        let con = db();
+        con.execute_batch(
+            "DELETE FROM translations;
+             INSERT INTO translations (id, hash, en, it, status, author, at, seq, trust) VALUES
+               (9, 'i', 'Grant might to allies. Slow the spread.', 'Concedi potenza agli alleati. Rallenta la diffusione.', 'auto', 'x', 0, 9, 1),
+               (10, 'j', 'Halla''s Fury', 'Furia di Halla', 'auto', 'x', 0, 10, 1);
+             INSERT INTO english_names VALUES ('Fury', 'boon', 1);",
+        )
+        .unwrap();
+        let ask = |_: &str, _: &str| -> Result<Value, String> {
+            Ok(json!({"texts": [
+                {"n": 0, "it": "Concedi Might agli alleati. Rallenta la diffusione.", "plain": ["Slow"]},
+                {"n": 1, "it": "Furia di Halla", "plain": ["Fury"]},
+            ]}))
+        };
+        let report = run(&con, Some(&ask), &Options { dry_run: false, max_texts: 10 }).unwrap();
+        assert_eq!((report.inside, report.rewritten, report.skipped, report.failed), (2, 1, 1, 0));
+        assert_eq!(it(&con, 9), "Concedi Might agli alleati. Rallenta la diffusione.");
+        assert_eq!(it(&con, 10), "Furia di Halla");
+        // Neither is asked again.
+        let never = |_: &str, user: &str| -> Result<Value, String> { panic!("asked again: {user}") };
+        let report = run(&con, Some(&never), &Options { dry_run: false, max_texts: 10 }).unwrap();
+        assert_eq!(report.inside, 0);
     }
 
     #[test]
