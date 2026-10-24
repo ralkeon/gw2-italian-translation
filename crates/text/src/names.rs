@@ -265,14 +265,32 @@ impl Names {
         out
     }
 
+    /// The forms of `name` an Italian sentence may have: the name, without its "The" (the Italian
+    /// article takes its place: "la Wizard's Tower è"), and the singular of a plural that is a name
+    /// too (an English name does not change in the plural: "i Sunspear", "gli Elder Dragon").
+    fn italian_forms<'a>(&self, name: &'a str) -> Vec<&'a str> {
+        let mut out = vec![name];
+        if let Some(rest) = name.strip_prefix("The ") {
+            out.push(rest);
+        }
+        if let Some(singular) = name.strip_suffix('s')
+            && words(singular).first().is_some_and(|w| self.by_first.get(w.text).is_some_and(|l| l.iter().any(|n| n == singular)))
+        {
+            out.push(singular);
+        }
+        out
+    }
+
     /// The names `en` keeps that `it` does not have, as written in `en`.
     pub fn missing<'a>(&self, en: &'a str, it: &str) -> Vec<&'a str> {
         let mut out: Vec<&str> = Vec::new();
         for (from, to) in self.find(en) {
             let name = &en[from..to];
-            let there = it.match_indices(name).any(|(at, _)| {
-                let (before, after) = (it[..at].chars().next_back(), it[at + name.len()..].chars().next());
-                before.is_none_or(|c| !is_word_char(c)) && after.is_none_or(|c| !is_word_char(c))
+            let there = self.italian_forms(name).into_iter().any(|form| {
+                it.match_indices(form).any(|(at, _)| {
+                    let (before, after) = (it[..at].chars().next_back(), it[at + form.len()..].chars().next());
+                    before.is_none_or(|c| !is_word_char(c)) && after.is_none_or(|c| !is_word_char(c))
+                })
             });
             if !there && !out.contains(&name) {
                 out.push(name);
@@ -481,6 +499,16 @@ pub fn english_brought_in<'a>(en: &str, old: &str, new: &'a str, keep: &[&str]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_without_its_the_or_in_the_singular_is_there() {
+        let names = Names::new(["The Wizard's Tower", "Sunspear", "Sunspears", "Elder Dragon", "Elder Dragons", "Glints"]);
+        let en = "The Wizard's Tower is unlike anywhere. We fought the Elder Dragons with the Sunspears.";
+        assert!(names.missing(en, "La Wizard's Tower è diversa. Abbiamo combattuto gli Elder Dragon con i Sunspear.").is_empty());
+        // The singular counts only where it is a name too.
+        assert_eq!(names.missing("We spoke with the Glints today.", "Abbiamo parlato con i Glint oggi."), ["Glints"]);
+        assert_eq!(names.missing(en, "La Torre del Mago è diversa. Abbiamo combattuto gli Elder Dragons con i Sunspear."), ["The Wizard's Tower"]);
+    }
 
     #[test]
     fn only_the_names_come_back_in_english() {

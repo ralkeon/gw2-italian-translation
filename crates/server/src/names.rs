@@ -100,7 +100,13 @@ Italian translation is, and fix only the words right around it (articles, prepos
 becomes \"l'Elixir B\"). The article or preposition before an English name follows its first \
 letter as if it were Italian: elided before a vowel (\"dell'Ash Legion\", \"nell'Echovald Forest\", \"all'Auric \
 Basin\"), \"lo\" before s + consonant or z (\"dello Skyscale\", \"allo Zephyr Sanctum\"), \"di\" before \"The\" \
-(\"Manuale di The Shining Blade\"); the gender stays the one the Italian gave it. Do not translate anything again, do not change the rest. Keep every %token%, \
+in a title (\"Manuale di The Shining Blade\"); the gender stays the one the Italian gave it (\"lo Skywatch \
+Archipelago\", an arcipelago). In a sentence the \"The\" of a name gives way to the Italian article (\"La Wizard's \
+Tower è diversa\", \"la Shining Blade protegge\"), never \"The Wizard's Tower è\". An English name does not change \
+in the Italian plural: the singular, as for the boons (\"i Sunspear\", \"gli Elder Dragon\", \"i Seraph\", \
+\"i Fractal\"). Put the English name in place of its Italian translation, never next to it (\"Provocazione \
+dell'Holo-Dancer\" is \"Taunt dell'Holo-Dancer\", not \"Provocazione dell'Holo-Dancer Taunt\"), and add nothing \
+the Italian did not say. Do not translate anything again, do not change the rest. Keep every %token%, \
 every <tag>, every [tag] and every line break exactly as they are.
 
 The lowercase words in \"keep\" are words of the game's mechanics: \"boon\" (benedizione, vantaggio) and \"condition\" (condizione, alterazione). Use the English word wherever the Italian translated it, as an Italian loanword: it does not change in the plural (\"i boon\", \"le condition\"; \"boon\" is masculine, \"condition\" feminine), it is lowercase in a sentence and capitalised in a title or label (\"Barriera per Boon\"), and it is never elided (\"il boon\", \"della condition\", never \"l'boon\"). The attributes \"Condition Damage\", \"Condition Duration\" and \"Boon Duration\" stay whole in English (\"+100 Condition Damage\"). \"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". The attributes in \"keep\" (Power, Precision, Toughness, Vitality, Ferocity, Healing Power, Concentration, Expertise, Agony Resistance) stay in English, capitalised, never elided (\"+100 Power\", \"in base al tuo Power\", \"della Ferocity\"), never \"potenza\", \"precisione\", \"robustezza\", \"vitalità\", \"ferocia\". The boons and conditions in \"keep\" (Might, Fury, Quickness, Bleeding, Burning, Vulnerability...) and Knockback, Knockdown stay in English, capitalised, also where the English writes them in lowercase in a sentence (\"grant might\" is \"conferisci Might\", \"inflict bleeding\" is \"infliggi Bleeding\"), never elided except the ones starting with a vowel (\"dell'Aegis\"); the verbs stay Italian (\"chill\" assiderare, \"cripple\" azzoppare, \"blind\" accecare, \"poison\" avvelenare). Nothing else goes back to English; the skill types and labels in <c=@abilitytype> (\"Glamour.\", \"Signet Passive:\") stay in English, as the English has them. \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: they stay in English as Italian loanwords, the same in the plural (\"la rune\", \"le rune\", \"il sigil\", \"i sigil\", \"la relic\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\". A stat prefix in \"keep\" (\"Berserker\", \"Carrion\", \"Knight\") stays in English without the \"'s\", after the Italian noun, with no article or preposition and the same in the plural (\"Insegna in seta Berserker\", \"Spadone di perla Carrion\", \"Cappotto esaltato Knight\"), never \"del Berserker\" or \"della Carogna\". A name before the prefix stays after it with \"di\" (\"Beigarth's Knight Insignia\" is \"Insegna Knight di Beigarth\").
@@ -314,6 +320,75 @@ fn whole(names: &Names, en: &str) -> Option<String> {
     names.whole(en).or_else(|| term.then(|| en.to_owned())).or_else(|| affix.map(str::to_owned))
 }
 
+/// The words of `s` in lowercase, split at apostrophes and hyphens too ("dell'Holo-Dancer": "dell",
+/// "holo", "dancer"), outside `<tags>`, `%tokens%` and `[marks]`.
+fn plain_words(s: &str) -> Vec<String> {
+    let mut bare = String::with_capacity(s.len());
+    let mut until: Option<char> = None;
+    for c in s.chars() {
+        match (until, c) {
+            (Some(end), _) if c == end => until = None,
+            (Some(_), _) => {}
+            (None, '<') => until = Some('>'),
+            (None, '[') => until = Some(']'),
+            (None, '%') => until = Some('%'),
+            (None, _) => bare.push(c),
+        }
+    }
+    bare.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+}
+
+/// The articles and prepositions a rewrite may change around a name ("nell'Arcipelago di Skywatch"
+/// becomes "nello Skywatch Archipelago").
+const AROUND: &[&str] = &[
+    "il", "lo", "la", "i", "gli", "le", "l", "un", "uno", "una", "di", "del", "dello", "della", "dei", "degli", "delle",
+    "dell", "a", "al", "allo", "alla", "ai", "agli", "alle", "all", "da", "dal", "dallo", "dalla", "dai", "dagli",
+    "dalle", "dall", "in", "nel", "nello", "nella", "nei", "negli", "nelle", "nell", "con", "su", "sul", "sullo",
+    "sulla", "sui", "sugli", "sulle", "sull", "per", "tra", "fra", "e", "ed", "d",
+];
+
+/// The Italian verbs that come with a mechanic put back ("Tormenta i nemici" becomes "Infliggi
+/// Torment ai nemici"), and the ones that stay Italian (cripple azzoppare, chill assiderare).
+const VERBS: &[&str] = &[
+    "conferisci", "conferisce", "conferiscono", "conferire", "conferendo", "conferito", "conferita", "infliggi", "infligge",
+    "infliggono", "infliggere", "infliggendo", "inflitto", "inflitta", "applica", "applicano", "applicare", "applicando",
+    "rimuovi", "rimuove", "rimuovono", "rimuovere", "rimuovendo", "ottieni", "ottiene", "ottengono", "ottenere",
+    "ottenendo", "azzoppa", "azzoppare", "assidera", "assiderare", "acceca", "accecare",
+];
+
+/// Whether the rewrite `new` of `old` only swaps Italian for the English of `en`: no Italian word
+/// `old` did not have but articles and prepositions (", conferendo Might." added at the end), and
+/// something of `old` taken out for what came in (a name put next to its translation, not in its
+/// place: "Provocazione dell'Holo-Dancer Taunt").
+pub(crate) fn swaps_only(en: &str, old: &str, new: &str, keep: &[&str]) -> bool {
+    let (en, old_words, new_words) = (plain_words(en), plain_words(old), plain_words(new));
+    // The names and terms in any of their forms ("conditions" in the English, "condition" here).
+    let mut allowed: Vec<String> = keep.iter().flat_map(|k| plain_words(k)).collect();
+    for (term, forms) in names::TERMS {
+        allowed.extend(std::iter::once(term).chain(forms.iter()).flat_map(|f| plain_words(f)));
+    }
+    for attribute in names::TERM_ATTRIBUTES {
+        allowed.extend(plain_words(attribute));
+    }
+    let invented = new_words.iter().any(|w| {
+        !old_words.contains(w)
+            && !en.contains(w)
+            && !allowed.contains(w)
+            && !AROUND.contains(&w.as_str())
+            && !VERBS.contains(&w.as_str())
+            && w.chars().any(char::is_alphabetic)
+    });
+    let mut left = new_words.clone();
+    let removed = old_words.iter().any(|w| match left.iter().position(|n| n == w) {
+        Some(at) => {
+            left.swap_remove(at);
+            false
+        }
+        None => true,
+    });
+    !invented && removed
+}
+
 /// Whether every name of `en` that `it` elides into ("l'Elixir B") starts with a vowel: "l'Toss
 /// Elixir H" is not Italian.
 pub(crate) fn elided_well(names: &Names, en: &str, it: &str) -> bool {
@@ -409,6 +484,7 @@ pub fn run(con: &Connection, ask: Option<&Ask>, options: &Options) -> rusqlite::
                         && names::english_brought_in(&row.en, &row.it, it, &wanted(&row.it)).is_empty()
                         && markup::token_mismatch(&row.en, it).is_empty()
                         && elided_well(&names, &row.en, it)
+                        && swaps_only(&row.en, &row.it, it, &keep(&names, &row.en, &row.it))
                         && row.it.contains("[pl:") == it.contains("[pl:")
                 });
                 match usable {
@@ -483,6 +559,37 @@ mod tests {
 
     fn it(con: &Connection, id: i64) -> String {
         con.query_row("SELECT it FROM translations WHERE id = ?1", [id], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn a_rewrite_only_swaps_italian_for_english() {
+        // Rewrites of the night of 2026-10-24: the name in place of its translation.
+        assert!(swaps_only(
+            "Raccogli all of Zojja's journal pages in Skywatch Archipelago.",
+            "Raccogli tutte le pagine del diario di Zojja nell'Arcipelago di Skywatch.",
+            "Raccogli tutte le pagine del diario di Zojja nello Skywatch Archipelago.",
+            &["Skywatch Archipelago"]
+        ));
+        assert!(swaps_only("Harrowshot—Fear", "Harrowshot — Paura", "Harrowshot — Fear", &["Fear"]));
+        assert!(swaps_only("Inflict torment.", "Tormenta i nemici.", "Infliggi Torment ai nemici.", &["Torment"]));
+        assert!(swaps_only("Removes conditions.", "Rimuove le condizioni.", "Rimuove le condition.", &["condition"]));
+        assert!(swaps_only(
+            "The Wizard's Tower is unlike anywhere.",
+            "La Torre del Mago è diversa.",
+            "La Wizard's Tower è diversa.",
+            &["The Wizard's Tower"]
+        ));
+        assert!(swaps_only("+%num1% Power", "+%num1% Potenza", "+%num1% Power", &["Power"]));
+        // Words the Italian did not say, and a name next to its translation.
+        assert!(!swaps_only(
+            "Send them to whatever god might still accept them.",
+            "Mandali da qualunque dio possa ancora accoglierli.",
+            "Mandali da qualunque dio possa ancora accoglierli, conferendo Might.",
+            &["Might"]
+        ));
+        assert!(!swaps_only("Power Skritt Suit", "Tuta da combattimento Skritt", "Tuta da combattimento Power Skritt", &["Power"]));
+        assert!(!swaps_only("The sweat burning your eyes.", "Il sudore che ti brucia gli occhi.", "Il sudore che ti causa Burning gli occhi.", &["Burning"]));
+        assert!(!swaps_only("Holo-Dancer Taunt", "Provocazione dell'Holo-Dancer", "Provocazione dell'Holo-Dancer Taunt", &["Taunt"]));
     }
 
     #[test]

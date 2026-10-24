@@ -80,8 +80,11 @@ Each must be in the Italian exactly as written in the English; fix only the word
 (\"l'Elisir B\" becomes \"l'Elixir B\").
 - The article or preposition before an English name follows its first letter as if it were Italian: \
 elided before a vowel (\"dell'Ash Legion\", \"nell'Echovald Forest\", \"all'Auric Basin\"), \"lo\" before \
-s + consonant or z (\"dello Skyscale\", \"allo Zephyr Sanctum\"), \"di\" before \"The\" (\"Manuale di The \
-Shining Blade\"). \"della Ash Legion\" or \"del Skyscale\" is a mistake to fix.
+s + consonant or z (\"dello Skyscale\", \"allo Zephyr Sanctum\"), \"di\" before \"The\" in a title (\"Manuale di The \
+Shining Blade\"). \"della Ash Legion\" or \"del Skyscale\" is a mistake to fix. In a sentence the \"The\" of a \
+name gives way to the Italian article (\"La Wizard's Tower è diversa\", \"la Shining Blade protegge\"); an English \
+name does not change in the Italian plural (\"i Sunspear\", \"gli Elder Dragon\", \"i Seraph\", \"i Fractal\"): \
+\"The Wizard's Tower è\" and \"gli Elder Dragons\" are mistakes to fix.
 - The lowercase words in \"keep\" are words of the game's mechanics: \"boon\" (benedizione, vantaggio) and \
 \"condition\" (condizione, alterazione). Use the English word as an Italian loanword: it does not change \
 in the plural (\"i boon\", \"le condition\"; \"boon\" is masculine, \"condition\" feminine), it is lowercase \

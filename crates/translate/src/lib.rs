@@ -40,7 +40,10 @@ clear for interface labels, buttons and item names.
 in English. The article or preposition before an English name follows its first letter as if it \
 were Italian: elided before a vowel (\"dell'Ash Legion\", \"nell'Echovald Forest\", \"all'Auric \
 Basin\"), \"lo\" before s + consonant or z (\"dello Skyscale\", \"allo Zephyr Sanctum\"), \"di\" \
-before \"The\" (\"Manuale di The Shining Blade\").
+before \"The\" in a title (\"Manuale di The Shining Blade\"); in a sentence the \"The\" gives way to the \
+Italian article (\"La Wizard's Tower è\", \"la Shining Blade\"). An English name does not change in the \
+Italian plural (\"i Sunspear\", \"gli Elder Dragon\", \"i Seraph\"). \"Fractal\" (the fractals of the Mists) \
+always stays in English, also in dialogue (\"il Fractal\", \"i Fractal\", \"Fractal di livello 40\").
 - The words of the game's mechanics stay in English, as Italian players say them: the names of \
 skills, traits, specializations, professions and mounts; the skill types and labels (Glamour, \
 Signet, Shatter, Mantra, Trap...); the boons and conditions by name, capitalised, also where the \
