@@ -27,7 +27,7 @@ use gw2it_text::{
     glossary::Term,
     markup,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -131,10 +131,25 @@ pub struct Options {
     pub include_manual: bool,
 }
 
-/// A text the job may rewrite: a machine translation (any text with `include_manual`), with no
-/// plural marks (`[pl:"..."]`, made by the addon from the singular: a rewrite would break them).
-fn editable(entry: &Entry, include_manual: bool) -> bool {
-    (entry.trust <= 1 || include_manual) && !entry.it.contains("[pl:") && !entry.it.contains("[s]")
+/// A text the job may rewrite: a machine translation (any text with `include_manual`), not written
+/// by a job above this one (`locked`, priority.rs), with no plural marks (`[pl:"..."]`, made by the
+/// addon from the singular: a rewrite would break them).
+fn editable(entry: &Entry, include_manual: bool, locked: &HashSet<(i64, String)>) -> bool {
+    (entry.trust <= 1 || include_manual)
+        && !locked.contains(&(entry.id, entry.hash.clone()))
+        && !entry.it.contains("[pl:")
+        && !entry.it.contains("[s]")
+}
+
+/// The rows of the jobs above this one: shown to the model as examples, never rewritten (they were
+/// asked about every night, and the update left them as they were).
+fn locked(con: &Connection) -> rusqlite::Result<HashSet<(i64, String)>> {
+    let mut stmt = con.prepare(&format!(
+        "SELECT id, hash FROM translations WHERE author IN ({})",
+        crate::priority::ABOVE_CONSISTENCY
+    ))?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
 }
 
 fn load(con: &Connection) -> rusqlite::Result<Vec<Entry>> {
@@ -168,6 +183,7 @@ pub fn run(
 ) -> rusqlite::Result<Report> {
     let mut report = Report::default();
     let entries = load(con)?;
+    let locked = locked(con)?;
     let found = consistency::groups(&entries);
     report.groups = found.len();
     // Only the words that are a name of one word kept in English, a faction, a place, a creature
@@ -207,7 +223,7 @@ pub fn run(
             continue;
         }
         report.checked += 1;
-        match settle(con, &entries, group, ask, options)? {
+        match settle(con, &entries, &locked, group, ask, options)? {
             Outcome::Consistent => {
                 report.consistent += 1;
                 remember(con, group, options)?;
@@ -305,6 +321,7 @@ fn remember(con: &Connection, group: &Group, options: &Options) -> rusqlite::Res
 fn settle(
     con: &Connection,
     entries: &[Entry],
+    locked: &HashSet<(i64, String)>,
     group: &Group,
     ask: &dyn Fn(&str, &str) -> Result<Value, Failure>,
     options: &Options,
@@ -313,10 +330,14 @@ fn settle(
     let all = options.include_manual;
     // Reviewing the hand corrections too: the English name beats the translators' Italian one.
     let existing = if all { None } else { glossary_term(con, &group.word)? };
+    // Nothing the job could change: settled as it is, until its forms change.
+    if !chosen.iter().any(|&i| editable(&entries[i], all, locked)) {
+        return Ok(Outcome::Consistent);
+    }
     let texts: Vec<Value> = chosen
         .iter()
         .enumerate()
-        .map(|(n, &i)| json!({ "n": n, "en": entries[i].en, "it": entries[i].it, "editable": editable(&entries[i], all) }))
+        .map(|(n, &i)| json!({ "n": n, "en": entries[i].en, "it": entries[i].it, "editable": editable(&entries[i], all, locked) }))
         .collect();
     let user = json!({ "word": group.word, "glossary": existing.as_ref().map(|(it, _)| it), "texts": texts }).to_string();
     let answer = match ask(SYSTEM, &user) {
@@ -347,7 +368,7 @@ fn settle(
             continue;
         };
         let entry = &entries[i];
-        let usable = editable(entry, all)
+        let usable = editable(entry, all, locked)
             && new != entry.it
             && !new.trim().is_empty()
             && new.chars().count() <= TEXT_MAX
@@ -378,30 +399,39 @@ fn settle(
         .collect();
     eprintln!("consistency: {}: term {term:?}, wrong {wrong:?}", group.word);
     let mut set = false;
+    let mut texts = done.len();
     if !options.dry_run {
         let now = now_ms();
+        texts = 0;
+        // Only if it is still what the model saw, and still a machine translation (unless
+        // `include_manual`: a hand correction stays one, with its author and trust). The history
+        // has the same condition: no entry for a row left as it was.
+        let still = format!(
+            "id = ?1 AND hash = ?2 AND it = ?3 AND (trust <= 1 OR ?4) AND author NOT IN ({})",
+            crate::priority::ABOVE_CONSISTENCY
+        );
         for (i, new) in &done {
             let entry = &entries[*i];
             con.execute(
-                "INSERT INTO history (id, hash, it, status, author, at, replaced_by, replaced_at)
-                 SELECT id, hash, it, status, author, at, ?3, ?4 FROM translations WHERE id = ?1 AND hash = ?2",
-                params![entry.id, entry.hash, AUTHOR, now],
+                &format!(
+                    "INSERT INTO history (id, hash, it, status, author, at, replaced_by, replaced_at)
+                     SELECT id, hash, it, status, author, at, ?5, ?6 FROM translations WHERE {still}"
+                ),
+                params![entry.id, entry.hash, entry.it, all, AUTHOR, now],
             )?;
-            // Only if it is still what the model saw, and still a machine translation (unless
-            // `include_manual`: a hand correction stays one, with its author and trust).
             let changed = con.execute(
                 &format!(
-                    "UPDATE translations SET it = ?3, at = ?5,
+                    "UPDATE translations SET it = ?7, at = ?6,
                          status = CASE WHEN trust >= 2 THEN status ELSE 'auto' END,
-                         author = CASE WHEN trust >= 2 THEN author ELSE ?4 END,
+                         author = CASE WHEN trust >= 2 THEN author ELSE ?5 END,
                          trust = CASE WHEN trust >= 2 THEN trust ELSE 1 END,
                          seq = (SELECT coalesce(max(seq), 0) FROM translations) + 1
-                     WHERE id = ?1 AND hash = ?2 AND it = ?6 AND (trust <= 1 OR ?7) AND author NOT IN ({})",
-                    crate::priority::ABOVE_CONSISTENCY
+                     WHERE {still}"
                 ),
-                params![entry.id, entry.hash, markup::straight_quotes(new), AUTHOR, now, entry.it, all],
+                params![entry.id, entry.hash, entry.it, all, AUTHOR, now, markup::straight_quotes(new)],
             )?;
             if changed > 0 {
+                texts += 1;
                 con.execute(
                     "INSERT INTO consistency_log (id, hash, word, old, new, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![entry.id, entry.hash, group.word, entry.it, new, now],
@@ -411,7 +441,7 @@ fn settle(
         let said = Term { en: group.word.clone(), it: term, wrong };
         set = glossary::put(con, &said, AUTHOR, if all { 3 } else { 1 }, now, 0)?;
     }
-    Ok(Outcome::Rewrote { texts: done.len(), term: set })
+    Ok(Outcome::Rewrote { texts, term: set })
 }
 
 #[cfg(test)]
@@ -566,6 +596,31 @@ mod tests {
         // The English name is the glossary's now, above the contributors.
         let (it, trust): (String, i64) = con.query_row("SELECT it, trust FROM glossary", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         assert_eq!((it.as_str(), trust), ("Seraph", 3));
+    }
+
+    #[test]
+    fn a_row_of_a_job_above_is_not_rewritten_nor_counted_nor_put_in_history() {
+        let con = db();
+        // The names job wrote the archer: a machine translation still, but above this job.
+        con.execute("UPDATE translations SET author = 'names' WHERE id = 5", []).unwrap();
+        let users = RefCell::new(Vec::new());
+        let answer = json!({
+            "consistent": false, "term": "Serafini",
+            "rewrites": [{"n": 1, "it": "Soldato dei Serafini"}, {"n": 4, "it": "Arciere dei Serafini"}]
+        });
+        let ask = |system: &str, user: &str| {
+            users.borrow_mut().push(user.to_owned());
+            Ok(if system == CLASSIFY { json!({"names": ["Seraph"]}) } else { answer.clone() })
+        };
+        let report = run(&con, &ask, &Options { max_groups: 5, dry_run: false, include_manual: false }).unwrap();
+        assert_eq!(report.rewritten, 1, "{report:?}");
+        assert_eq!(it(&con, 5), "Arciere Serafini");
+        let history: Vec<i64> =
+            con.prepare("SELECT id FROM history").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(history, [2]);
+        // The model was told it could not change it.
+        let asked: Value = serde_json::from_str(users.borrow().last().unwrap()).unwrap();
+        assert_eq!(asked["texts"][4]["editable"], false);
     }
 
     #[test]
