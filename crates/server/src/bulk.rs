@@ -1,4 +1,4 @@
-//! gw2it-server bulk --file texts.jsonl --translators translators.json [--max-texts N] [--dry-run]
+//! gw2it-server bulk --file texts.jsonl|map_it.db --translators translators.json [--max-texts N] [--dry-run]
 //!
 //! Texts nobody has seen in the game yet, translated ahead: one `[id, hash, en]` per line, `hash`
 //! the XXH3-64 of the English in UTF-8 as the game gives it. They go the same way as in the addon
@@ -60,6 +60,9 @@ struct Text {
 }
 
 fn read(file: &str) -> Result<Vec<Text>, String> {
+    if file.ends_with(".db") {
+        return read_map(file);
+    }
     let content = std::fs::read_to_string(file).map_err(|e| format!("cannot read {file}: {e}"))?;
     let mut texts = Vec::new();
     for (n, line) in content.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
@@ -74,6 +77,23 @@ fn read(file: &str) -> Result<Vec<Text>, String> {
     }
     texts.sort_by_key(|t| t.id);
     Ok(texts)
+}
+
+/// The texts of the Local Translator module's map (`texts(key, en, ...)`, its release "mappa"):
+/// only the ID and the English, never its Italian; the hash is ours. Texts without a letter
+/// (placeholders, numbers) are left out.
+fn read_map(file: &str) -> Result<Vec<Text>, String> {
+    let con = Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| format!("cannot open {file}: {e}"))?;
+    let mut stmt = con.prepare("SELECT key, en FROM texts WHERE en <> '' ORDER BY key").map_err(|e| format!("{file}: {e}"))?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .and_then(|rows| rows.collect::<rusqlite::Result<Vec<_>>>())
+        .map_err(|e| format!("{file}: {e}"))?;
+    Ok(rows
+        .into_iter()
+        .filter(|(id, en)| (0..=u32::MAX as i64).contains(id) && en.chars().any(char::is_alphabetic))
+        .map(|(id, en)| Text { id: id as u32, hash: format!("{:016x}", xxhash_rust::xxh3::xxh3_64(en.as_bytes())), en })
+        .collect())
 }
 
 /// Writes the rows `[id, hash, en, it]` as this server's machine translations.
@@ -220,4 +240,14 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
         }
     }
     Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn map_hash_is_the_game_s() {
+        // Row 1102280 as the game sent it to the addons.
+        let en = "%str1%%str2%Obsidian Light Gloves%str3%%str4%";
+        assert_eq!(format!("{:016x}", xxhash_rust::xxh3::xxh3_64(en.as_bytes())), "07ed9f3d957e55a6");
+    }
 }
