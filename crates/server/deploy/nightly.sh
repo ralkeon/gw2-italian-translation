@@ -20,3 +20,4 @@ echo "=== $(date)" >> consistency.log
 echo "=== $(date)" >> plurals.log
 ./gw2it-server plurals --db data/gw2it.db --translators translators.json --max-texts 1500 >> plurals.log 2>&1
 ./gw2it-server replicate --db data/gw2it.db --to https://gw2it-sync.gw2it-sync.workers.dev --key-file replica.key >> replicate.log 2>&1
+sh ./export.sh
