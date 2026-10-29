@@ -84,7 +84,18 @@ s + consonant or z (\"dello Skyscale\", \"allo Zephyr Sanctum\"), \"di\" before 
 Shining Blade\"). \"della Ash Legion\" or \"del Skyscale\" is a mistake to fix. In a sentence the \"The\" of a \
 name gives way to the Italian article (\"La Wizard's Tower è diversa\", \"la Shining Blade protegge\"); an English \
 name does not change in the Italian plural (\"i Sunspear\", \"gli Elder Dragon\", \"i Seraph\", \"i Fractal\"): \
-\"The Wizard's Tower è\" and \"gli Elder Dragons\" are mistakes to fix.
+\"The Wizard's Tower è\" and \"gli Elder Dragons\" are mistakes to fix. Runes and sigils by name stay whole in \
+English, with or without Superior, Major or Minor (\"Rune of the Daredevil\", \"Sigil of Exposure\", \"Ricetta: Sigil of \
+Agony\"), and so does Agony in item names (\"Infusione di Agony +5\", \"Lente di Agony rosa\"). The name of a skin or armor \
+set stays in English after the Italian noun (\"Ascia Painter's Brilliance\", \"Aspetto per spada Royal Flame\", \"Fucile \
+dei Lightborne\"); \"Slumbering\" in an item name is \"sopito\" (\"Spada d'ossidiana sopita\", \"Fucile dei Lightborne sopiti\").
+- A condition or a disable stays in English only as its name or label: as a verb or a participle it stays Italian \
+(\"You were poisoned\" is \"Sei stato avvelenato\", \"knock back your foes\" is \"respingere i nemici\", never \"Sei stato \
+Poisoned\" or \"infliggere Knockback\"). An attribute stays in English only as the attribute (\"Expertise in Torch \
+Crafting\" is \"Competenza nella creazione di torce\"). The player (%str1%, \"you\") has no gender in the English: never \
+change the gender the translation gave them. The title of a done achievement stays in the past (\"Defeated X\" is \
+\"Sconfitto X\" or \"Hai sconfitto X\", never \"Sconfiggi X\"), and a participle agrees with its subject (\"I rampicanti \
+sono stati distrutti\").
 - The lowercase words in \"keep\" are words of the game's mechanics: \"boon\" (benedizione, vantaggio) and \
 \"condition\" (condizione, alterazione). Use the English word as an Italian loanword: it does not change \
 in the plural (\"i boon\", \"le condition\"; \"boon\" is masculine, \"condition\" feminine), it is lowercase \

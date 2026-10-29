@@ -104,7 +104,10 @@ in a title (\"Manuale di The Shining Blade\"); the gender stays the one the Ital
 Archipelago\", an arcipelago). In a sentence the \"The\" of a name gives way to the Italian article (\"La Wizard's \
 Tower è diversa\", \"la Shining Blade protegge\"), never \"The Wizard's Tower è\". An English name does not change \
 in the Italian plural: the singular, as for the boons (\"i Sunspear\", \"gli Elder Dragon\", \"i Seraph\", \
-\"i Fractal\"). Put the English name in place of its Italian translation, never next to it (\"Provocazione \
+\"i Fractal\"). Runes and sigils by name stay whole in English, with or without Superior, Major or Minor (\"Rune \
+of the Daredevil\", \"Sigil of Exposure\"), and so does Agony in item names (\"Infusione di Agony +5\"). The name of a \
+skin or armor set stays in English after the Italian noun (\"Ascia Painter's Brilliance\", \"Fucile dei Lightborne\"); \
+\"Slumbering\" in an item name is \"sopito\" (\"Spada d'ossidiana sopita\"). Put the English name in place of its Italian translation, never next to it (\"Provocazione \
 dell'Holo-Dancer\" is \"Taunt dell'Holo-Dancer\", not \"Provocazione dell'Holo-Dancer Taunt\"), and add nothing \
 the Italian did not say. Do not translate anything again, do not change the rest. Keep every %token%, \
 every <tag>, every [tag] and every line break exactly as they are.

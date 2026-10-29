@@ -43,7 +43,12 @@ Basin\"), \"lo\" before s + consonant or z (\"dello Skyscale\", \"allo Zephyr Sa
 before \"The\" in a title (\"Manuale di The Shining Blade\"); in a sentence the \"The\" gives way to the \
 Italian article (\"La Wizard's Tower è\", \"la Shining Blade\"). An English name does not change in the \
 Italian plural (\"i Sunspear\", \"gli Elder Dragon\", \"i Seraph\"). \"Fractal\" (the fractals of the Mists) \
-always stays in English, also in dialogue (\"il Fractal\", \"i Fractal\", \"Fractal di livello 40\").
+always stays in English, also in dialogue (\"il Fractal\", \"i Fractal\", \"Fractal di livello 40\"). \
+Runes and sigils by name stay whole in English, with or without Superior, Major or Minor (\"Rune of the \
+Daredevil\", \"Sigil of Exposure\"), and so does Agony in item names (\"Infusione di Agony +5\"). The name \
+of a skin or armor set stays in English after the Italian noun (\"Ascia Painter's Brilliance\", \"Aspetto \
+per spada Royal Flame\", \"Fucile dei Lightborne\"); \"Slumbering\" in an item name is \"sopito\" (\"Spada \
+d'ossidiana sopita\").
 - The words of the game's mechanics stay in English, as Italian players say them: the names of \
 skills, traits, specializations, professions and mounts; the skill types and labels (Glamour, \
 Signet, Shatter, Mantra, Trap...); the boons and conditions by name, capitalised, also where the \
