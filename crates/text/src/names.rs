@@ -403,9 +403,10 @@ fn has_word(s: &str, forms: &[&str]) -> bool {
 pub fn terms_missing(en: &str, it: &str) -> Vec<&'static str> {
     let mechanics = mechanics_part(en);
     let spoken = words(&mechanics).iter().any(|w| SPOKEN.contains(&w.text));
+    let prose = prose_terms(en);
     TERMS
         .iter()
-        .filter(|(term, _)| !spoken || ALWAYS_TERMS.contains(term))
+        .filter(|(term, _)| (!spoken || ALWAYS_TERMS.contains(term)) && !prose.contains(term))
         .filter(|(term, forms)| {
             let found = if *term == "Power" { has_word(&generic_power(&mechanics), forms) } else { has_word(&mechanics, forms) };
             found && !has_word(it, forms)
@@ -454,6 +455,105 @@ fn generic_power(s: &str) -> String {
         }
     }
     out
+}
+
+/// The terms that are plain English words too, and `prose_terms` looks at: not "boon", "condition", the
+/// upgrades but "relic", nor "Immobile", an Italian word too.
+const PLAIN_TOO: &[&str] = &[
+    "focus", "relic", "Power", "Precision", "Toughness", "Vitality", "Ferocity", "Concentration", "Expertise", "Aegis",
+    "Alacrity", "Fury", "Might", "Protection", "Quickness", "Regeneration", "Resistance", "Resolution", "Stability",
+    "Swiftness", "Vigor", "Superspeed", "Stealth", "Distortion", "Bleeding", "Blinded", "Burning", "Chilled", "Confusion",
+    "Crippled", "Fear", "Poisoned", "Slow", "Taunt", "Torment", "Vulnerability", "Weakness", "Knockback", "Knockdown",
+];
+/// The words after one that make it a verb ("slow the fall", "this might be").
+const PLAIN_AFTER: &[&str] = &[
+    "the", "a", "an", "your", "their", "his", "her", "its", "our", "my", "them", "him", "us", "me", "this", "that",
+    "these", "those", "be", "have", "not",
+];
+/// The things after one that make it a plain noun ("Power Core", "Power Source"); not the focus ("Focus Core").
+const THINGS: &[&str] = &[
+    "core", "cores", "source", "sources", "generator", "generators", "regulator", "regulators", "cell", "cells", "supply", "station",
+];
+/// The terms that are verbs too, and the words after them that make them the verb ("fear nearby foes",
+/// "slow enemies", "focus on"): the verbs stay Italian.
+const VERBS_TOO: &[&str] = &["Slow", "Fear", "Taunt", "Poisoned", "focus", "Power", "Stealth"];
+const VERB_OBJECTS: &[&str] = &["nearby", "foes", "enemies", "targets", "allies", "yourself", "down", "everything"];
+/// Whose it is, before a boon or condition, makes it a plain word ("their might", "the Mantle's protection"),
+/// unless it is about the mechanic after all ("your might stacks").
+const OWNERS: &[&str] = &["their", "his", "her", "my", "our", "its", "your"];
+const MECHANIC_AFTER: &[&str] = &["duration", "stack", "stacks", "on"];
+/// The words before "might" that make it the verb ("this might take a while").
+const MODAL: &[&str] = &["this", "it", "that", "they", "we", "you", "i", "he", "she", "which", "who", "there", "what"];
+/// The words after "might" that make it the boon after all ("grants you might and fury", "you might for 5 seconds").
+const NOT_A_VERB: &[&str] = &["and", "or", "for", "on", "to", "stacks", "duration", "when", "while", "whenever", "each", "per", "with"];
+
+/// The terms of `PLAIN_TOO` that `en` has only as plain words, never as the mechanic: "slow the fall",
+/// "with all their might", "the White Mantle's protection", "dwarven relics", "Power Core", "this might
+/// take a while", and any in the flavour text, the words in quotes and the texts someone says. Anything
+/// else is the mechanic: the skills write it in lowercase ("grant might, fury and swiftness"), so only
+/// what is surely a plain word counts; the relics are the upgrade only capitalised ("Relic of the Thief").
+pub fn prose_terms(en: &str) -> Vec<&'static str> {
+    let present: Vec<&'static str> = TERMS
+        .iter()
+        .filter(|(term, forms)| PLAIN_TOO.contains(term) && has_word(en, forms))
+        .map(|(term, _)| *term)
+        .collect();
+    if present.is_empty() {
+        return present;
+    }
+    // "the power of", "power to": not the attribute (generic_power).
+    let mechanics = generic_power(&mechanics_part(en));
+    let spoken = words(&mechanics).iter().any(|w| SPOKEN.contains(&w.text));
+    let found = if spoken { Vec::new() } else { words(&mechanics) };
+    let term_of = |w: &str| TERMS.iter().find(|(term, forms)| PLAIN_TOO.contains(term) && forms.iter().any(|f| w.eq_ignore_ascii_case(f))).map(|(t, _)| *t);
+    let mut mechanic: Vec<&'static str> = Vec::new();
+    for (n, w) in found.iter().enumerate() {
+        let Some(term) = term_of(w.text) else { continue };
+        // The words next to it in the same sentence: "Gain Vitality. Your..." is no "vitality your".
+        let next = |a: &Word, b: &Word| !mechanics[a.start + a.text.len()..b.start].contains(['.', '!', '?', ':', ';', ',', '<', '\n']);
+        let after = found.get(n + 1).filter(|a| next(w, a)).map(|w| w.text.to_lowercase()).unwrap_or_default();
+        let before = n.checked_sub(1).map(|b| &found[b]).filter(|b| next(b, w)).map(|w| w.text.to_lowercase()).unwrap_or_default();
+        let capital = w.text.starts_with(char::is_uppercase);
+        let plain = PLAIN_AFTER.contains(&after.as_str())
+            || (term != "focus" && THINGS.contains(&after.as_str()))
+            || (term == "focus" && ["on", "upon"].contains(&after.as_str()))
+            || (VERBS_TOO.contains(&term) && (VERB_OBJECTS.contains(&after.as_str()) || before == "to"))
+            || (!ATTRIBUTES.contains(&term) && !MECHANIC_AFTER.contains(&after.as_str())
+                && (OWNERS.contains(&before.as_str()) || before.ends_with("'s") || before.ends_with("’s")))
+            || (term == "Might" && !capital && MODAL.contains(&before.as_str()) && !after.is_empty() && !NOT_A_VERB.contains(&after.as_str()))
+            || (term == "relic" && !capital && !en.contains("Double-click"));
+        if !plain && !mechanic.contains(&term) {
+            mechanic.push(term);
+        }
+    }
+    present.into_iter().filter(|t| !mechanic.contains(t)).collect()
+}
+
+/// The attributes of `PLAIN_TOO`: "your power" is the attribute.
+const ATTRIBUTES: &[&str] = &["Power", "Precision", "Toughness", "Vitality", "Ferocity", "Concentration", "Expertise"];
+
+/// The terms the English `en` has only as plain words (`prose_terms`) that the rewrite `new` of `old`
+/// put in English: "con tutte le loro forze" become "con tutte le loro Might", "per rallentare la caduta"
+/// become "per Slow la caduta". Not inside a longer name of `names` ("Soldier's Focus", "Power of Valor").
+pub fn terms_brought_in(names: &Names, en: &str, old: &str, new: &str) -> Vec<&'static str> {
+    let bare = |s: &str| -> String {
+        let mut out = s.to_owned();
+        for (from, to) in names.find(s).into_iter().rev() {
+            if s[from..to].contains(' ') {
+                out.replace_range(from..to, "");
+            }
+        }
+        out
+    };
+    let (old, new) = (bare(old), bare(new));
+    let count = |s: &str, forms: &[&str]| words(s).iter().filter(|w| forms.iter().any(|f| w.text.eq_ignore_ascii_case(f))).count();
+    prose_terms(en)
+        .into_iter()
+        .filter(|term| {
+            let forms = TERMS.iter().find(|(t, _)| t == term).map(|(_, f)| *f).unwrap_or_default();
+            count(&new, forms) > count(&old, forms)
+        })
+        .collect()
 }
 
 /// Whether `it` elides into a term ("l'boon", "dell'condition"). The boons that start with a vowel
@@ -539,6 +639,43 @@ mod tests {
         assert_eq!(terms_missing("Spindrift Focus", "Focalizzatore Spindrift"), ["focus"]);
         assert!(terms_missing("Spindrift Focus", "Focus Spindrift").is_empty());
         assert!(terms_missing("Focused Strikes", "Colpi concentrati").is_empty());
+    }
+
+    #[test]
+    fn plain_words_are_no_mechanic() {
+        // The nightly jobs' mistakes (2026-11): a plain word put in English.
+        let wrong = [
+            ("Deploy a makeshift parachute to slow your fall.", "per rallentare la caduta", "per Slow la caduta"),
+            ("They fought joyfully, with all their might.", "con tutte le loro forze", "con tutte le loro Might"),
+            ("The White Mantle's protection came at a price.", "La protezione del White Mantle", "La Protection del White Mantle"),
+            ("Why are you interested in dwarven relics?", "Cerca reliquie naniche", "Cerca relic naniche"),
+            ("Focus on the Mouth of Mordremoth.", "Concentrati sulla Mouth", "focus sulla Mouth"),
+            ("Repair the Power Core.", "Ripara il nucleo energetico.", "Ripara il Power Core."),
+            ("Use the turret to slow enemies.", "per rallentare i nemici", "per Slow i nemici"),
+            ("This might take a while.", "Potrebbe volerci un po'.", "Might volerci un po'."),
+        ];
+        for (en, old, new) in wrong {
+            assert!(!terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
+            assert!(terms_missing(en, old).is_empty(), "{en:?}");
+        }
+        // The mechanic stays as it was.
+        let right = [
+            ("Grant might, fury, and swiftness to nearby allies.", "Conferisci potenza, furia e velocità", "Conferisci Might, Fury e Swiftness"),
+            ("Inflict bleeding and burning on foes.", "Infliggi sanguinamento", "Infliggi Bleeding e Burning"),
+            ("+25 power", "+25 potenza", "+25 Power"),
+            ("Gain Might.", "Ottieni potenza.", "Ottieni Might."),
+            ("Chilled foes take more damage.", "I nemici assiderati", "I nemici Chilled"),
+            ("Might duration +10%", "Durata potenza +10%", "Might duration +10%"),
+            ("Relic of the Thief", "Reliquia del ladro", "Relic del ladro"),
+            ("Every third finish grants you might and a barrier.", "ti conferisce potenza", "ti conferisce Might"),
+            ("Double-click to choose a relic.", "per scegliere una reliquia.", "per scegliere una relic."),
+            ("Gain Soldier's Focus with your focus.", "Ottieni la Concentrazione del soldato quando colpisci", "Ottieni la Soldier's Focus quando colpisci"),
+            ("Applies %num1% stacks of vulnerability.", "Applica %num1% di vulnerabilità.", "Applica %num1% di Vulnerability."),
+        ];
+        for (en, old, new) in right {
+            assert!(terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
+        }
+        assert_eq!(terms_missing("Grant might, fury, and swiftness to allies.", "Conferisci potenza"), ["Fury", "Might", "Swiftness"]);
     }
 
     fn names() -> Names {

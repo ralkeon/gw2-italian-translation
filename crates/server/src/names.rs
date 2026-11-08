@@ -485,6 +485,7 @@ pub fn run(con: &Connection, ask: Option<&Ask>, options: &Options) -> rusqlite::
                         && wanted(it).is_empty()
                         && !names::term_elided(it)
                         && names::english_brought_in(&row.en, &row.it, it, &wanted(&row.it)).is_empty()
+                        && names::terms_brought_in(&names, &row.en, &row.it, it).is_empty()
                         && markup::token_mismatch(&row.en, it).is_empty()
                         && elided_well(&names, &row.en, it)
                         && swaps_only(&row.en, &row.it, it, &keep(&names, &row.en, &row.it))
@@ -668,7 +669,8 @@ mod tests {
             ]}))
         };
         let report = run(&con, Some(&ask), &Options { dry_run: false, max_texts: 10 }).unwrap();
-        assert_eq!((report.inside, report.rewritten, report.skipped, report.failed), (2, 1, 1, 0));
+        // "Halla's Fury" is whose fury it is (names::prose_terms): not even asked.
+        assert_eq!((report.inside, report.rewritten, report.skipped, report.failed), (1, 1, 0, 0));
         assert_eq!(it(&con, 9), "Concedi Might agli alleati. Rallenta la diffusione.");
         assert_eq!(it(&con, 10), "Furia di Halla");
         // Neither is asked again.

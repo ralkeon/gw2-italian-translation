@@ -125,6 +125,21 @@ fn complement_marked(marked: &str) -> bool {
     false
 }
 
+/// Whether `new` marks a word of a name of `en` (english_names) that `old` did not mark: a name in
+/// English stays the same in the plural ("Shadow[pl:"Shadows"] Assassin Nika", "Tyria[pl:"Tyrie"]").
+fn english_marked(names: &Names, en: &str, old: &str, new: &str) -> bool {
+    let marked = |s: &str| -> Vec<String> {
+        s.match_indices("[pl:")
+            .filter_map(|(at, _)| s[..at].split(|c: char| !c.is_alphanumeric() && c != '\'').next_back().map(str::to_owned))
+            .filter(|w| !w.is_empty())
+            .collect()
+    };
+    let found: Vec<&str> = names.find(en).into_iter().map(|(from, to)| &en[from..to]).collect();
+    let english = |w: &str| found.iter().any(|name| name.split(|c: char| !c.is_alphanumeric() && c != '\'').any(|e| e == w));
+    let before = marked(old);
+    marked(new).iter().any(|w| english(w) && !before.contains(w))
+}
+
 /// Up to `max` machine translations whose English has a plural mark, not checked yet, the newest first.
 pub fn pending(con: &Connection, max: usize) -> rusqlite::Result<Vec<Text>> {
     let mut stmt = con.prepare_cached(
@@ -152,6 +167,9 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, by_hand: bool) -
     // that agrees), otherwise it is the complement ("Skin per scudo") that was marked.
     if complement_marked(new) || mark_after_break(new) {
         return Some("a mark on the complement, not on the head noun");
+    }
+    if english_marked(names, en, &text.it, new) {
+        return Some("a mark on an English word");
     }
     let (old, new) = (singular(&text.it), singular(new));
     // The same words: one that is not in the old text must be the singular or plural of one that is.

@@ -185,6 +185,9 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool, 
     if !names::english_brought_in(en, old, new, &keep(names, en, old)).is_empty() {
         return Some("English brought back");
     }
+    if !names::terms_brought_in(names, en, old, new).is_empty() {
+        return Some("a plain word put in English as a mechanic");
+    }
     if !markup::token_mismatch(en, new).is_empty() || markup::stray_percent(new) || markup::wrap_broken(en, new) || markup::ability_labels(en, new) != new || old.contains("[pl:") != new.contains("[pl:") {
         return Some("markup changed");
     }
