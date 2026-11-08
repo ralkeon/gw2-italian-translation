@@ -4,9 +4,10 @@
 # quota and the later ones in the order of priority.rs would work on rows the earlier ones are
 # still changing. First the texts nobody has seen in the game yet, from the Local Translator
 # module's map (mappa.sh, bulk.rs: at most 5000 a night, the rest the next nights), so that the
-# jobs below take them too. Order: names (which names stay in English, the highest), then consistency (one
-# form per name), then plurals (only the form, on top of any row), then the copy to the spare,
-# which gets everything they changed.
+# jobs below take them too. Order: names (which names stay in English, the highest), then plurals
+# (only the form, on top of any row), then the copy to the spare, which gets everything they changed.
+# Not consistency (one form per name) since 2026-11-08: with the names in English it found nothing
+# to rewrite for ten nights and only spent the quota of the review; run it by hand if ever needed.
 cd "$HOME/gw2it-sync" || exit 1
 exec 9> nightly.lock
 flock -n 9 || { echo "$(date): nightly already running" >> nightly.log; exit 0; }
@@ -22,8 +23,6 @@ if [ -s mappa/map_it.db ]; then
 fi
 echo "=== $(date)" >> names.log
 ./gw2it-server names --db data/gw2it.db --fetch --translators translators.json >> names.log 2>&1
-echo "=== $(date)" >> consistency.log
-./gw2it-server consistency --db data/gw2it.db --translators translators.json --max-groups 200 >> consistency.log 2>&1
 echo "=== $(date)" >> plurals.log
 ./gw2it-server plurals --db data/gw2it.db --translators translators.json --max-texts 1500 >> plurals.log 2>&1
 ./gw2it-server replicate --db data/gw2it.db --to https://gw2it-sync.gw2it-sync.workers.dev --key-file replica.key >> replicate.log 2>&1
