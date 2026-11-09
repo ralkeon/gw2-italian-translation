@@ -468,7 +468,7 @@ const PLAIN_TOO: &[&str] = &[
 /// The words after one that make it a verb ("slow the fall", "this might be").
 const PLAIN_AFTER: &[&str] = &[
     "the", "a", "an", "your", "their", "his", "her", "its", "our", "my", "them", "him", "us", "me", "this", "that",
-    "these", "those", "be", "have", "not",
+    "these", "those", "be", "have", "not", "has", "had", "was", "were",
 ];
 /// The things after one that make it a plain noun ("Power Core", "Power Source"); not the focus ("Focus Core").
 const THINGS: &[&str] = &[
@@ -514,7 +514,9 @@ pub fn prose_terms(en: &str) -> Vec<&'static str> {
         let after = found.get(n + 1).filter(|a| next(w, a)).map(|w| w.text.to_lowercase()).unwrap_or_default();
         let before = n.checked_sub(1).map(|b| &found[b]).filter(|b| next(b, w)).map(|w| w.text.to_lowercase()).unwrap_or_default();
         let capital = w.text.starts_with(char::is_uppercase);
+        // "fear of their king"; not "Relic of the Thief".
         let plain = PLAIN_AFTER.contains(&after.as_str())
+            || (!capital && after == "of")
             || (term != "focus" && THINGS.contains(&after.as_str()))
             || (term == "focus" && ["on", "upon"].contains(&after.as_str()))
             || (VERBS_TOO.contains(&term) && (VERB_OBJECTS.contains(&after.as_str()) || before == "to"))
@@ -653,6 +655,9 @@ mod tests {
             ("Repair the Power Core.", "Ripara il nucleo energetico.", "Ripara il Power Core."),
             ("Use the turret to slow enemies.", "per rallentare i nemici", "per Slow i nemici"),
             ("This might take a while.", "Potrebbe volerci un po'.", "Might volerci un po'."),
+            ("Power has been restored to the cannons.", "L'energia è stata ripristinata ai cannoni.", "Power è stata ripristinata ai cannoni."),
+            ("Was it pride, or was it fear of their king?", "o la paura del loro re?", "o il Fear del loro re?"),
+            ("The palace is under the protection of the Shining Blade.", "sotto la protezione della Shining Blade.", "sotto la Protection della Shining Blade."),
         ];
         for (en, old, new) in wrong {
             assert!(!terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
