@@ -108,7 +108,12 @@ that sense: \"party\" as a celebration is \"festa\", not \"gruppo\"; the \"skin\
 \"ogre\" is \"orco\", and an Italian word is never replaced by the English one (\"orchi\" stays \"orchi\"). Never drop words or a \
 suffix in brackets that the old Italian and the English both have (\"(Raro)\", \"(Maestro)\", \"Crimson Skull Bandits\"), never \
 add a name that is not in the English, and never add an English plural -s to an English name (\"dei Rift\", not \"dei Rifts\"). \
-\"Mouth of Mordremoth\" is feminine (\"la Mouth of Mordremoth\", \"sconfitta\").
+\"Mouth of Mordremoth\" is feminine (\"la Mouth of Mordremoth\", \"sconfitta\"). Never invent a word: an Italian word you are not sure \
+exists is no fix (\"Ceveno\", \"Mannaiatrice\", \"Passi di corsa\"); never change the gender a translation gave a named character \
+(\"Almorra\", \"Sayida\" are women) or the player; keep the spaces at the end of a line exactly as they are. A boon, condition or \
+attribute that the English has as a plain word in a story, a dialogue or a description stays a plain Italian word (\"the noise and \
+fury\" is \"il rumore e la furia\", \"frozen in fear\" is \"paralizzato dalla paura\", \"cosmic power\" is \"potere cosmico\", \
+\"expect resistance\" is \"aspettati resistenza\", \"prevent being burned\" is \"evita di bruciarti\").
 \"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: English loanwords, the same in the plural (\"la rune\", \"i sigil\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\". A stat prefix in \"keep\" (\"Berserker\", \"Carrion\") stays in English without the \"'s\", after the Italian noun, with no article or preposition (\"Insegna in seta Berserker\", never \"del Berserker\"). A name before the prefix stays after it with \"di\" (\"Beigarth's Knight Insignia\" is \"Insegna Knight di Beigarth\"). The boons and conditions in \"keep\" (Might, Fury, Quickness, Swiftness, Aegis, Bleeding, Burning, Vulnerability, Weakness...) stay in English, capitalised, never elided except the ones starting with a vowel (\"dell'Aegis\"), also where the English writes them in lowercase in a sentence (\"grant might\" is \"conferisci Might\", \"inflict bleeding\" is \"infliggi Bleeding\"); the verbs stay Italian (\"chill\" assiderare, \"cripple\" azzoppare, \"blind\" accecare, \"poison\" avvelenare, \"stun\" stordire, \"daze\" disorientare). The disables in lists and labels (Stun, Daze, Knockback, Knockdown, Pull, Launch, Float, Sink, Fear, Taunt) stay in English (\"Annulla lo Stun\"). Nothing else goes back to English. The attributes in \"keep\" (Power, Precision, Toughness, Vitality, Ferocity, Healing Power, Concentration, Expertise, Agony Resistance) stay in English, capitalised, never elided (\"+100 Power\", \"in base al tuo Power\"). Skill types and labels \
 in <c=@abilitytype> (\"Glamour.\", \"Signet Passive:\", \"Phantasms\") stay in English as the English has them, for every profession. Keep every %token%, every <tag>, every [tag] and every line \
 break exactly as they are. \"%%\" is the percent sign (\"25%%\"): never write a single \"%\", the game cuts the text there.
@@ -199,7 +204,49 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool, 
     if glossary::fix(en, new, terms) != new {
         return Some("a wrong form of the glossary");
     }
+    if prefix_with_di(names, en, old, new) {
+        return Some("a stat prefix with di");
+    }
+    if other_sense(old, new) {
+        return Some("a glossary word in another sense");
+    }
     None
+}
+
+/// The stat prefixes of the items that are not in the API's stats (the old karma and dungeon armor).
+const OLD_PREFIXES: &[&str] = &[
+    "Trooper", "Slayer", "Stalwart", "Inquisitor", "Commando", "Healer", "Defender", "Assaulter", "Hunter", "Vagabond",
+    "Wizard", "Stout", "Hearty", "Ravaging", "Honed", "Strong", "Vital", "Precise", "Mighty", "Malign", "Vigorous", "Resilient",
+];
+
+/// Whether `new` put "di"/"del"/"dell'" before a stat prefix of `en` that `old` had without:
+/// "Trooper's Armor" is "Armatura Trooper", never "Armatura di Trooper".
+fn prefix_with_di(names: &Names, en: &str, old: &str, new: &str) -> bool {
+    en.split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '’')).filter_map(|w| w.strip_suffix("'s").or_else(|| w.strip_suffix("’s"))).any(|base| {
+        if !(names.is_prefix(base) || OLD_PREFIXES.contains(&base)) {
+            return false;
+        }
+        let with = |s: &str| {
+            let s = s.to_lowercase();
+            let b = base.to_lowercase();
+            ["di ", "del ", "dello ", "della ", "dei ", "degli ", "dell'", "dell’"].iter().any(|p| s.contains(&format!("{p}{b}")))
+        };
+        with(new) && !with(old)
+    })
+}
+
+/// The words a glossary term has in another sense, that a fix may not turn into the glossary's:
+/// a "party" that is a celebration (festa, not gruppo), the "skin" of a body (pelle, not aspetto).
+const OTHER_SENSES: &[(&str, &[&str])] = &[("gruppo", &["festa", "feste"]), ("aspetto", &["pelle", "pelli"]), ("aspetti", &["pelle", "pelli"])];
+
+/// Whether `new` replaced a word of `old` in another sense with the glossary's ("festa" became "gruppo").
+fn other_sense(old: &str, new: &str) -> bool {
+    let count = |s: &str, w: &str| {
+        s.to_lowercase().split(|c: char| !c.is_alphabetic()).filter(|x| *x == w).count()
+    };
+    OTHER_SENSES.iter().any(|(glossary, others)| {
+        count(new, glossary) > count(old, glossary) && others.iter().any(|o| count(new, o) < count(old, o))
+    })
 }
 
 /// Asks the model about `texts`: one verdict each, None for the ones it did not answer.
@@ -455,5 +502,28 @@ mod tests {
         // A stray percent still is not.
         let broken = |_: &str, _: &str| -> Result<Value, String> { Ok(answer(json!([{"n": 0, "it": "Ottieni 5% Armatura.", "why": "x", "kind": "meaning"}]))) };
         assert_eq!(run(&con, &broken, 1, true).unwrap().refused, 1);
+    }
+}
+
+#[cfg(test)]
+mod checks {
+    use super::*;
+
+    #[test]
+    fn no_di_before_a_stat_prefix() {
+        let names = Names::new(["x"]).with_affixes([("Berserker's", "Berserker's")]);
+        assert!(prefix_with_di(&names, "Trooper's Armor", "Armatura Trooper's", "Armatura di Trooper"));
+        assert!(prefix_with_di(&names, "Berserker's Boots", "Stivali Berserker", "Stivali del Berserker"));
+        assert!(!prefix_with_di(&names, "Berserker's Boots", "Stivali del Berserker", "Stivali Berserker"));
+        // A name that is no prefix takes its "di".
+        assert!(!prefix_with_di(&names, "Tinari's Music Box", "Music box Tinari", "Carillon di Tinari"));
+    }
+
+    #[test]
+    fn a_glossary_word_only_in_its_sense() {
+        assert!(other_sense("Evita che la festa dei troll degeneri.", "Evita che il gruppo dei troll degeneri."));
+        assert!(other_sense("tocchi la tua pelle", "tocchi il tuo aspetto"));
+        assert!(!other_sense("Invita nel party", "Invita nel gruppo"));
+        assert!(!other_sense("Unisciti al squadra", "Unisciti al gruppo"));
     }
 }

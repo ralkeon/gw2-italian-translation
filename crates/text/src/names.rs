@@ -152,6 +152,13 @@ impl Names {
         self
     }
 
+    /// Whether `word` ("Berserker", "Knight's") is one of the stat prefixes.
+    pub fn is_prefix(&self, word: &str) -> bool {
+        let bare = |s: &str| s.strip_suffix("'s").or_else(|| s.strip_suffix("’s")).unwrap_or(s).to_owned();
+        let word = bare(word);
+        self.affixed.values().any(|a| bare(a) == word)
+    }
+
     /// With the names of more words kept also inside a title (`proper`).
     pub fn with_proper<I: IntoIterator<Item = S>, S: AsRef<str>>(mut self, list: I) -> Self {
         self.proper = list.into_iter().map(|n| n.as_ref().trim().to_owned()).filter(|n| n.contains(' ')).collect();
@@ -505,6 +512,13 @@ pub fn prose_terms(en: &str) -> Vec<&'static str> {
     let mechanics = generic_power(&mechanics_part(en));
     let spoken = words(&mechanics).iter().any(|w| SPOKEN.contains(&w.text));
     let found = if spoken { Vec::new() } else { words(&mechanics) };
+    // A text that speaks of no mechanic ("the noise and fury", "dizziness, confusion, and death",
+    // "frozen in fear", "Expect resistance."): its lowercase terms are plain words.
+    let context = found.len() <= 2 || mechanics.contains(['%', '+']) || found.iter().any(|w| {
+        let l = w.text.to_lowercase();
+        let l = l.trim_end_matches("'s").trim_end_matches("’s");
+        w.text.contains(|c: char| c.is_ascii_digit()) || CONTEXT.contains(&l)
+    });
     let term_of = |w: &str| TERMS.iter().find(|(term, forms)| PLAIN_TOO.contains(term) && forms.iter().any(|f| w.eq_ignore_ascii_case(f))).map(|(t, _)| *t);
     let mut mechanic: Vec<&'static str> = Vec::new();
     for (n, w) in found.iter().enumerate() {
@@ -512,10 +526,32 @@ pub fn prose_terms(en: &str) -> Vec<&'static str> {
         // The words next to it in the same sentence: "Gain Vitality. Your..." is no "vitality your".
         let next = |a: &Word, b: &Word| !mechanics[a.start + a.text.len()..b.start].contains(['.', '!', '?', ':', ';', ',', '<', '\n']);
         let after = found.get(n + 1).filter(|a| next(w, a)).map(|w| w.text.to_lowercase()).unwrap_or_default();
-        let before = n.checked_sub(1).map(|b| &found[b]).filter(|b| next(b, w)).map(|w| w.text.to_lowercase()).unwrap_or_default();
+        // The words before it in the same sentence, the nearest first.
+        let mut back: Vec<String> = Vec::new();
+        let mut cur = w;
+        for b in found[..n].iter().rev().take(3) {
+            if !next(b, cur) {
+                break;
+            }
+            back.push(b.text.to_lowercase());
+            cur = b;
+        }
+        let before = back.first().cloned().unwrap_or_default();
+        let before2 = back.get(1).map_or("", String::as_str);
         let capital = w.text.starts_with(char::is_uppercase);
+        // "power" is the attribute only next to gaining it: "gain power", "grants you more power",
+        // "gain increased power"; not "cosmic power", "collecting more power", "may give you power".
+        let gained = |s: &str| POWER_GAIN.contains(&s) || s.starts_with(|c: char| c.is_ascii_digit());
+        let power_gained = gained(&before) || gained(before2) || (before2 == "you" && back.get(2).is_some_and(|s| gained(s)));
         // "fear of their king"; not "Relic of the Thief".
-        let plain = PLAIN_AFTER.contains(&after.as_str())
+        let plain = (!capital && !context && term != "relic")
+            || (term == "Power" && !capital && !power_gained && !["your", "healing"].contains(&before.as_str()))
+            || (term == "Power" && POWER_THINGS.contains(&after.as_str()))
+            || (term == "Expertise" && (after == "in" || before == "siege"))
+            || (term == "Resolution" && !capital && RESOLUTION_BEFORE.contains(&before.as_str()))
+            // "a shrine of might"; not "stacks of might", "5 seconds of fury".
+            || (!capital && !ATTRIBUTES.contains(&term) && before == "of" && !before2.is_empty() && !HOW_MUCH.contains(&before2))
+            || PLAIN_AFTER.contains(&after.as_str())
             || (!capital && after == "of")
             || (term != "focus" && THINGS.contains(&after.as_str()))
             || (term == "focus" && ["on", "upon"].contains(&after.as_str()))
@@ -530,6 +566,34 @@ pub fn prose_terms(en: &str) -> Vec<&'static str> {
     }
     present.into_iter().filter(|t| !mechanic.contains(t)).collect()
 }
+
+/// The words that make a text speak of the mechanics (with any number, "%" or "+"): its lowercase
+/// terms are the game's.
+const CONTEXT: &[&str] = &[
+    "grant", "grants", "granted", "granting", "gain", "gains", "gained", "gaining", "inflict", "inflicts", "inflicted",
+    "inflicting", "apply", "applies", "applied", "applying", "remove", "removes", "removed", "removing", "cleanse",
+    "cleanses", "convert", "converts", "corrupt", "corrupts", "transfer", "transfers", "steal", "steals", "copy", "copies",
+    "stack", "stacks", "duration", "durations", "second", "seconds", "ally", "allies", "foe", "foes", "enemy", "enemies",
+    "target", "targets", "targeted", "boon", "boons", "condition", "conditions", "damage", "attack", "attacks", "strike",
+    "strikes", "skill", "skills", "trait", "traits", "cooldown", "recharge", "pulse", "pulses", "pulsing", "nearby",
+    "attunement", "shroud", "threshold", "while", "whenever", "when", "per", "increase", "increases", "increased",
+    "reduce", "reduces", "reduced", "bonus", "immune", "immunity", "cure", "cures", "affected", "afflicted", "suffering",
+    "improves", "improved",
+];
+/// The words before "power" (or two before it) that make it the attribute gained.
+const POWER_GAIN: &[&str] = &["gain", "gains", "gaining", "grant", "grants", "granting", "increase", "increases", "increased", "bonus", "additional", "improve", "improves", "improved"];
+/// The things after "power" that make it a plain noun: "Auxiliary Power Charge", "power grid".
+const POWER_THINGS: &[&str] = &[
+    "charge", "charges", "grid", "inverter", "inverters", "matrix", "matrices", "orb", "orbs", "plant", "node", "nodes",
+    "conduit", "conduits", "crystal", "crystals", "line", "lines", "surge", "outage", "level", "levels", "struggle",
+];
+/// The words before "resolution" that make it the screen's: "at a resolution smaller", "a higher resolution".
+const RESOLUTION_BEFORE: &[&str] = &["a", "an", "higher", "lower", "screen", "display", "native", "full", "render", "texture", "the"];
+/// The words before "of" that keep a boon or condition the mechanic: "stacks of might", "5 seconds of fury".
+const HOW_MUCH: &[&str] = &[
+    "stack", "stacks", "second", "seconds", "duration", "application", "applications", "number", "amount", "pulse",
+    "pulses", "instead", "effects", "effect", "type", "types", "boon", "boons", "condition", "conditions", "out",
+];
 
 /// The attributes of `PLAIN_TOO`: "your power" is the attribute.
 const ATTRIBUTES: &[&str] = &["Power", "Precision", "Toughness", "Vitality", "Ferocity", "Concentration", "Expertise"];
@@ -658,6 +722,21 @@ mod tests {
             ("Power has been restored to the cannons.", "L'energia è stata ripristinata ai cannoni.", "Power è stata ripristinata ai cannoni."),
             ("Was it pride, or was it fear of their king?", "o la paura del loro re?", "o il Fear del loro re?"),
             ("The palace is under the protection of the Shining Blade.", "sotto la protezione della Shining Blade.", "sotto la Protection della Shining Blade."),
+            // 2026-11-11.
+            ("Smash the ground with cosmic power, launching nearby enemies.", "con potere cosmico", "con cosmico Power"),
+            ("Kuda is collecting more power and stealing your allies!", "raccogliendo altro potere", "raccogliendo altro Power"),
+            ("And now he has a staff that will grant him potentially limitless power.", "un potere potenzialmente illimitato", "un Power potenzialmente illimitato"),
+            ("Auxiliary Power Charge", "Carica di energia ausiliaria", "Carica di Power ausiliaria"),
+            ("Expertise in Spear Crafting", "Competenza nella creazione di lance", "Expertise nella creazione di lance"),
+            ("Complete the associated siege expertise achievement.", "l'impresa di maestria d'assedio", "l'impresa di Expertise d'assedio"),
+            ("Render at a resolution smaller than that of the screen.", "a una risoluzione inferiore", "a una Resolution inferiore"),
+            ("A shrine of might", "Un santuario di forza", "Un santuario di Might"),
+            ("Unable to stand the noise and fury any longer, the titan surfaced.", "il rumore e la furia", "il rumore e la Fury"),
+            ("Test subjects may experience dizziness, confusion, and death.", "vertigini, confusione e morte", "vertigini, Confusion e morte"),
+            ("Fires still burning", "Fuochi ancora accesi", "Fuochi ancora Burning"),
+            ("Expect resistance. A lot of it.", "Aspettati resistenza.", "Aspettati della Resistance."),
+            ("The dolyak stopped in its tracks, frozen in fear.", "paralizzato dalla paura", "paralizzato dalla Fear"),
+            ("It's not too late. The dragon may give you power, but he's made you slaves.", "può darti potere", "può darti Power"),
         ];
         for (en, old, new) in wrong {
             assert!(!terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
@@ -676,6 +755,12 @@ mod tests {
             ("Double-click to choose a relic.", "per scegliere una reliquia.", "per scegliere una relic."),
             ("Gain Soldier's Focus with your focus.", "Ottieni la Concentrazione del soldato quando colpisci", "Ottieni la Soldier's Focus quando colpisci"),
             ("Applies %num1% stacks of vulnerability.", "Applica %num1% di vulnerabilità.", "Applica %num1% di Vulnerability."),
+            ("<c=@abilitytype>Signet Passive:</c> Improves power.", "Aumenta la potenza.", "Aumenta Power."),
+            ("Pumpkin Prowess increases power, toughness, and vitality.", "aumenta potenza, robustezza", "aumenta Power, Toughness"),
+            ("Might grants you more power. Gain might when entering shroud.", "ti conferisce più potenza", "ti conferisce più Power"),
+            ("Consume it to reveal the area, pulling foes out of stealth.", "dall'invisibilità", "dallo Stealth"),
+            ("ferocity", "ferocia", "Ferocity"),
+            ("Remove conditions from nearby allies.", "Rimuovi le condizioni", "Rimuovi le condition"),
         ];
         for (en, old, new) in right {
             assert!(terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
