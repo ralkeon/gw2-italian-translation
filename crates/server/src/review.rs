@@ -213,8 +213,11 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool, 
     None
 }
 
-/// The stat prefixes of the items that are not in the API's stats (the old karma and dungeon armor).
+/// The stat prefixes of the items that are not in the API's stats (the old karma and dungeon armor),
+/// and the names of the ascended ones ("Zojja's Short Bow" is "Arco corto Zojja").
 const OLD_PREFIXES: &[&str] = &[
+    "Zojja", "Occam", "Grizzlemouth", "Mathilde", "Theodosus", "Hronk", "Ebonmane", "Stonecleaver", "Chorben", "Coalforge",
+    "Soros", "Leftpaw", "Beigarth", "Tateos", "Gobrech", "Ahamid",
     "Trooper", "Slayer", "Stalwart", "Inquisitor", "Commando", "Healer", "Defender", "Assaulter", "Hunter", "Vagabond",
     "Wizard", "Stout", "Hearty", "Ravaging", "Honed", "Strong", "Vital", "Precise", "Mighty", "Malign", "Vigorous", "Resilient",
 ];
@@ -517,6 +520,7 @@ mod checks {
         assert!(!prefix_with_di(&names, "Berserker's Boots", "Stivali del Berserker", "Stivali Berserker"));
         // A name that is no prefix takes its "di".
         assert!(!prefix_with_di(&names, "Tinari's Music Box", "Music box Tinari", "Carillon di Tinari"));
+        assert!(prefix_with_di(&names, "Zojja's Short Bow", "Arco corto Zojja", "Arco corto di Zojja"));
     }
 
     #[test]
