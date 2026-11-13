@@ -108,7 +108,11 @@ that sense: \"party\" as a celebration is \"festa\", not \"gruppo\"; the \"skin\
 \"ogre\" is \"orco\", and an Italian word is never replaced by the English one (\"orchi\" stays \"orchi\"). Never drop words or a \
 suffix in brackets that the old Italian and the English both have (\"(Raro)\", \"(Maestro)\", \"Crimson Skull Bandits\"), never \
 add a name that is not in the English, and never add an English plural -s to an English name (\"dei Rift\", not \"dei Rifts\"). \
-\"Mouth of Mordremoth\" is feminine (\"la Mouth of Mordremoth\", \"sconfitta\"). Never invent a word: an Italian word you are not sure \
+\"Mouth of Mordremoth\" is feminine (\"la Mouth of Mordremoth\", \"sconfitta\"). \"the dragons\" are \"i draghi\", \
+never \"gli Elder Dragon\" unless the English says Elder Dragon; \"the Order\" alone is \"l'Ordine\" (\"Agente dei Whispers\" \
+stays as it is); \"the Dream\" is masculine (\"il Dream\"); \"Commander\", the player's title, stays in English \
+(\"Qual è la tua prossima mossa, Commander?\"); \"Captain\", \"General\" and \"Minister\" before a name are Italian \
+(\"il Capitano Kiel\", \"il Ministro Arton\"), and a name of a place stays whole (\"Cathedral of Zephyrs\"). Never invent a word: an Italian word you are not sure \
 exists is no fix (\"Ceveno\", \"Mannaiatrice\", \"Passi di corsa\"); never change the gender a translation gave a named character \
 (\"Almorra\", \"Sayida\" are women) or the player; keep the spaces at the end of a line exactly as they are. A boon, condition or \
 attribute that the English has as a plain word in a story, a dialogue or a description stays a plain Italian word (\"the noise and \
@@ -210,7 +214,21 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool, 
     if other_sense(old, new) {
         return Some("a glossary word in another sense");
     }
+    if name_added(en, old, new) {
+        return Some("a name added that the English does not have");
+    }
     None
+}
+
+/// The longer names a fix tends to put where the English has a plain or shorter word: "the dragons"
+/// are "i draghi", not "gli Elder Dragon"; "Whispers Agent" and "the Order" do not say "Order of
+/// Whispers"; "Priory scholars" and "the Order" are not the "Durmand Priory".
+const NOT_ADDED: &[&str] = &["elder dragon", "order of whispers", "durmand priory"];
+
+/// Whether `new` has one of `NOT_ADDED` more times than both `old` and the English `en`.
+fn name_added(en: &str, old: &str, new: &str) -> bool {
+    let count = |s: &str, n: &str| s.to_lowercase().matches(n).count();
+    NOT_ADDED.iter().any(|n| count(new, n) > count(old, n).max(count(en, n)))
 }
 
 /// The stat prefixes of the items that are not in the API's stats (the old karma and dungeon armor),
@@ -529,5 +547,20 @@ mod checks {
         assert!(other_sense("tocchi la tua pelle", "tocchi il tuo aspetto"));
         assert!(!other_sense("Invita nel party", "Invita nel gruppo"));
         assert!(!other_sense("Unisciti al squadra", "Unisciti al gruppo"));
+    }
+
+    #[test]
+    fn no_longer_name_than_the_english_has() {
+        // The review's fixes of 2026-11-13.
+        assert!(name_added("Why do they worship the dragons?", "Perché adorano i dragon?", "Perché adorano gli Elder Dragon?"));
+        assert!(name_added("Whispers Agent: It's okay.", "Agente dei Whispers: Va tutto bene.", "Agente dell'Order of Whispers: Va tutto bene."));
+        assert!(name_added(
+            "It was my honor to assist the Durmand Priory. Have you been with the Order long?",
+            "È stato un onore aiutare il Durmand Priory. Sei nel gruppo da molto?",
+            "È stato un onore aiutare il Durmand Priory. Sei nel Durmand Priory da molto?"
+        ));
+        // The name where the English has it.
+        assert!(!name_added("The Elder Dragons are waking.", "I draghi anziani si risvegliano.", "Gli Elder Dragon si risvegliano."));
+        assert!(!name_added("Why do they worship the dragons?", "Perché adorano i dragon?", "Perché adorano i draghi?"));
     }
 }

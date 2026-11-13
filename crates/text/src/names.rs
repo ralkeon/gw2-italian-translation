@@ -553,6 +553,8 @@ pub fn prose_terms(en: &str) -> Vec<&'static str> {
             || (!capital && !ATTRIBUTES.contains(&term) && before == "of" && !before2.is_empty() && !HOW_MUCH.contains(&before2))
             || PLAIN_AFTER.contains(&after.as_str())
             || (!capital && after == "of")
+            // "to find a weakness": a boon or condition takes no "a".
+            || (!capital && !ATTRIBUTES.contains(&term) && !["focus", "relic"].contains(&term) && ["a", "an"].contains(&before.as_str()))
             || (term != "focus" && THINGS.contains(&after.as_str()))
             || (term == "focus" && ["on", "upon"].contains(&after.as_str()))
             || (VERBS_TOO.contains(&term) && (VERB_OBJECTS.contains(&after.as_str()) || before == "to"))
@@ -586,6 +588,7 @@ const POWER_GAIN: &[&str] = &["gain", "gains", "gaining", "grant", "grants", "gr
 const POWER_THINGS: &[&str] = &[
     "charge", "charges", "grid", "inverter", "inverters", "matrix", "matrices", "orb", "orbs", "plant", "node", "nodes",
     "conduit", "conduits", "crystal", "crystals", "line", "lines", "surge", "outage", "level", "levels", "struggle",
+    "converter", "converters", "suit", "suits",
 ];
 /// The words before "resolution" that make it the screen's: "at a resolution smaller", "a higher resolution".
 const RESOLUTION_BEFORE: &[&str] = &["a", "an", "higher", "lower", "screen", "display", "native", "full", "render", "texture", "the"];
@@ -737,6 +740,10 @@ mod tests {
             ("Expect resistance. A lot of it.", "Aspettati resistenza.", "Aspettati della Resistance."),
             ("The dolyak stopped in its tracks, frozen in fear.", "paralizzato dalla paura", "paralizzato dalla Fear"),
             ("It's not too late. The dragon may give you power, but he's made you slaves.", "può darti potere", "può darti Power"),
+            // 2026-11-13.
+            ("Golem Power Converter", "Convertitore di potenza per golem", "Convertitore di Power per golem"),
+            ("Dredge Power Suit", "Tuta energetica dei Dredge", "Tuta Power dei Dredge"),
+            ("They study the dragons when Orr rose, in the hopes of finding a weakness.", "di trovare una debolezza", "di trovare una Weakness"),
         ];
         for (en, old, new) in wrong {
             assert!(!terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
@@ -761,6 +768,8 @@ mod tests {
             ("Consume it to reveal the area, pulling foes out of stealth.", "dall'invisibilità", "dallo Stealth"),
             ("ferocity", "ferocia", "Ferocity"),
             ("Remove conditions from nearby allies.", "Rimuovi le condizioni", "Rimuovi le condition"),
+            ("Equip a focus to gain a stack of might.", "Equipaggia un focalizzatore", "Equipaggia un focus"),
+            ("Your next attack inflicts a stack of weakness.", "infligge un accumulo di debolezza", "infligge un accumulo di Weakness"),
         ];
         for (en, old, new) in right {
             assert!(terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
