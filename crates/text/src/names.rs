@@ -539,12 +539,27 @@ pub fn prose_terms(en: &str) -> Vec<&'static str> {
         let before = back.first().cloned().unwrap_or_default();
         let before2 = back.get(1).map_or("", String::as_str);
         let capital = w.text.starts_with(char::is_uppercase);
+        // A capitalised boon or condition inside a longer name, right next to a capitalised word of
+        // that name: "Burning Spore", "Bleeding Pulpit" (the adjective before a thing), "Feral Fury",
+        // "Fragment of Prismatic Fury" (the last word, after its adjective); not "Gain Fury", "Inflicts
+        // Bleeding", "Your Might", "Burning Duration", "Scepter Might Gain", "Agony Resistance".
+        let tight = |a: &Word, b: &Word| &mechanics[a.start + a.text.len()..b.start] == " ";
+        let name_word = |o: &Word| {
+            let l = o.text.to_lowercase();
+            o.text.starts_with(char::is_uppercase) && term_of(o.text).is_none()
+                && ![CONTEXT, OWNERS, PLAIN_AFTER, MODAL, NOT_A_NAME].iter().any(|list| list.contains(&l.as_str()))
+        };
+        let last = found.get(n + 1).is_none_or(|a| !next(w, a));
+        let in_name = capital && !ATTRIBUTES.contains(&term) && !["focus", "relic"].contains(&term)
+            && ((last && n.checked_sub(1).is_some_and(|p| tight(&found[p], w) && name_word(&found[p])))
+                || (["Burning", "Bleeding"].contains(&term) && found.get(n + 1).is_some_and(|a| tight(w, a) && name_word(a))));
         // "power" is the attribute only next to gaining it: "gain power", "grants you more power",
         // "gain increased power"; not "cosmic power", "collecting more power", "may give you power".
         let gained = |s: &str| POWER_GAIN.contains(&s) || s.starts_with(|c: char| c.is_ascii_digit());
         let power_gained = gained(&before) || gained(before2) || (before2 == "you" && back.get(2).is_some_and(|s| gained(s)));
         // "fear of their king"; not "Relic of the Thief".
         let plain = (!capital && !context && term != "relic")
+            || in_name
             || (term == "Power" && !capital && !power_gained && !["your", "healing"].contains(&before.as_str()))
             || (term == "Power" && POWER_THINGS.contains(&after.as_str()))
             || (term == "Expertise" && (after == "in" || before == "siege"))
@@ -596,6 +611,14 @@ const RESOLUTION_BEFORE: &[&str] = &["a", "an", "higher", "lower", "screen", "di
 const HOW_MUCH: &[&str] = &[
     "stack", "stacks", "second", "seconds", "duration", "application", "applications", "number", "amount", "pulse",
     "pulses", "instead", "effects", "effect", "type", "types", "boon", "boons", "condition", "conditions", "out",
+];
+
+/// The capitalised words next to a boon or condition that are no part of a name: the labels' verbs
+/// ("Causes Fear", "Provides Protection") and the words of how much ("Total Might", "Max Stability").
+const NOT_A_NAME: &[&str] = &[
+    "causes", "cause", "provides", "provide", "gives", "give", "sets", "lose", "loses", "prevent", "prevents", "resist",
+    "resists", "ignore", "ignores", "total", "max", "maximum", "minimum", "extra", "more", "less", "double", "triple",
+    "and", "or", "to", "of", "no", "agony", "healing", "time", "chance", "radius",
 ];
 
 /// The attributes of `PLAIN_TOO`: "your power" is the attribute.
@@ -744,6 +767,15 @@ mod tests {
             ("Golem Power Converter", "Convertitore di potenza per golem", "Convertitore di Power per golem"),
             ("Dredge Power Suit", "Tuta energetica dei Dredge", "Tuta Power dei Dredge"),
             ("They study the dragons when Orr rose, in the hopes of finding a weakness.", "di trovare una debolezza", "di trovare una Weakness"),
+            // 2026-11-14.
+            ("Burning Spore", "Spora ardente", "Spora Burning"),
+            ("Bleeding Pulpit", "Pulpito sanguinante", "Pulpito Bleeding"),
+            ("Feral Fury", "Furia ferina", "Fury ferina"),
+            (
+                "Purified of Kralkatorrik's lingering influence, this aether can be used to charge an Uncharged Fragment of Prismatic Fury.",
+                "un Frammento non caricato di Furia Prismatica.",
+                "un Frammento non caricato di Fury Prismatica.",
+            ),
         ];
         for (en, old, new) in wrong {
             assert!(!terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
@@ -770,6 +802,13 @@ mod tests {
             ("Remove conditions from nearby allies.", "Rimuovi le condizioni", "Rimuovi le condition"),
             ("Equip a focus to gain a stack of might.", "Equipaggia un focalizzatore", "Equipaggia un focus"),
             ("Your next attack inflicts a stack of weakness.", "infligge un accumulo di debolezza", "infligge un accumulo di Weakness"),
+            ("Inflicts Bleeding • Immobilizes", "Provoca sanguinamento • Immobilizza", "Provoca Bleeding • Immobilizza"),
+            ("Causes Fear", "Provoca paura", "Provoca Fear"),
+            ("Your Might stacks last longer.", "I tuoi accumuli di potenza", "I tuoi accumuli di Might"),
+            ("Increased Burning Duration", "Durata della bruciatura aumentata", "Durata del Burning aumentata"),
+            ("Initial Target Knockdown Time", "Tempo di atterramento", "Tempo di Knockdown"),
+            ("Scepter Might Gain", "Aumento della potenza con lo scettro", "Aumento del Might con lo scettro"),
+            ("+5 Toughness\n+9 Agony Resistance", "+5 Robustezza\n+9 Resistenza all'Agonia", "+5 Toughness\n+9 Agony Resistance"),
         ];
         for (en, old, new) in right {
             assert!(terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");

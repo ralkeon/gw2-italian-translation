@@ -362,9 +362,16 @@ const VERBS: &[&str] = &[
 /// Whether the rewrite `new` of `old` only swaps Italian for the English of `en`: no Italian word
 /// `old` did not have but articles and prepositions (", conferendo Might." added at the end), and
 /// something of `old` taken out for what came in (a name put next to its translation, not in its
-/// place: "Provocazione dell'Holo-Dancer Taunt").
+/// place: "Provocazione dell'Holo-Dancer Taunt"), and no verb swapped for a term ("indebolendo e
+/// bruciando" become "indebolendo e Burning": the verb stays, "infliggendo Burning" would do).
 pub(crate) fn swaps_only(en: &str, old: &str, new: &str, keep: &[&str]) -> bool {
     let (en, old_words, new_words) = (plain_words(en), plain_words(old), plain_words(new));
+    let gerunds = |ws: &[String]| {
+        ws.iter().filter(|w| w.chars().count() > 5 && (w.ends_with("ando") || w.ends_with("endo")) && !["quando", "comando"].contains(&w.as_str())).count()
+    };
+    if gerunds(&new_words) < gerunds(&old_words) {
+        return false;
+    }
     // The names and terms in any of their forms ("conditions" in the English, "condition" here).
     let mut allowed: Vec<String> = keep.iter().flat_map(|k| plain_words(k)).collect();
     for (term, forms) in names::TERMS {
@@ -597,6 +604,10 @@ mod tests {
         assert!(!swaps_only("Power Skritt Suit", "Tuta da combattimento Skritt", "Tuta da combattimento Power Skritt", &["Power"]));
         assert!(!swaps_only("The sweat burning your eyes.", "Il sudore che ti brucia gli occhi.", "Il sudore che ti causa Burning gli occhi.", &["Burning"]));
         assert!(!swaps_only("Holo-Dancer Taunt", "Provocazione dell'Holo-Dancer", "Provocazione dell'Holo-Dancer Taunt", &["Taunt"]));
+        // 2026-11-14: the verb swapped for the condition; with its verb it is right.
+        let en = "Lunge forward, weakening and burning any foes left in your wake.";
+        assert!(!swaps_only(en, "Scatta, indebolendo e bruciando tutti i nemici.", "Scatta, indebolendo e Burning tutti i nemici.", &["Burning"]));
+        assert!(swaps_only(en, "Scatta, indebolendo e bruciando tutti i nemici.", "Scatta, indebolendo e infliggendo Burning a tutti i nemici.", &["Burning"]));
     }
 
     #[test]

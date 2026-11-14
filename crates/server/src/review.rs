@@ -111,14 +111,15 @@ add a name that is not in the English, and never add an English plural -s to an 
 \"Mouth of Mordremoth\" is feminine (\"la Mouth of Mordremoth\", \"sconfitta\"). \"the dragons\" are \"i draghi\", \
 never \"gli Elder Dragon\" unless the English says Elder Dragon; \"the Order\" alone is \"l'Ordine\" (\"Agente dei Whispers\" \
 stays as it is); \"the Dream\" is masculine (\"il Dream\"); \"Commander\", the player's title, stays in English \
-(\"Qual è la tua prossima mossa, Commander?\"); \"Captain\", \"General\" and \"Minister\" before a name are Italian \
-(\"il Capitano Kiel\", \"il Ministro Arton\"), and a name of a place stays whole (\"Cathedral of Zephyrs\"). Never invent a word: an Italian word you are not sure \
+(\"Qual è la tua prossima mossa, Commander?\"); \"Captain\", \"General\", \"Minister\" and \"Priestess\" before a name are Italian \
+(\"il Capitano Kiel\", \"il Ministro Arton\", \"la Sacerdotessa Rhie\"), but \"Legate Minister\", \"Minister Li\", \"Queen Jennah\" and \
+\"Countess Anise\" stay in English, and so does \"Countess\" alone for Anise; \"Golemancer\" stays in English (\"Golemancer del Pact\"); a name of a place stays whole (\"Cathedral of Zephyrs\"). Never invent a word: an Italian word you are not sure \
 exists is no fix (\"Ceveno\", \"Mannaiatrice\", \"Passi di corsa\"); never change the gender a translation gave a named character \
 (\"Almorra\", \"Sayida\" are women) or the player; keep the spaces at the end of a line exactly as they are. A boon, condition or \
 attribute that the English has as a plain word in a story, a dialogue or a description stays a plain Italian word (\"the noise and \
 fury\" is \"il rumore e la furia\", \"frozen in fear\" is \"paralizzato dalla paura\", \"cosmic power\" is \"potere cosmico\", \
 \"expect resistance\" is \"aspettati resistenza\", \"prevent being burned\" is \"evita di bruciarti\").
-\"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: English loanwords, the same in the plural (\"la rune\", \"i sigil\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\". A stat prefix in \"keep\" (\"Berserker\", \"Carrion\") stays in English without the \"'s\", after the Italian noun, with no article or preposition (\"Insegna in seta Berserker\", never \"del Berserker\"). A name before the prefix stays after it with \"di\" (\"Beigarth's Knight Insignia\" is \"Insegna Knight di Beigarth\"). The boons and conditions in \"keep\" (Might, Fury, Quickness, Swiftness, Aegis, Bleeding, Burning, Vulnerability, Weakness...) stay in English, capitalised, never elided except the ones starting with a vowel (\"dell'Aegis\"), also where the English writes them in lowercase in a sentence (\"grant might\" is \"conferisci Might\", \"inflict bleeding\" is \"infliggi Bleeding\"); the verbs stay Italian (\"chill\" assiderare, \"cripple\" azzoppare, \"blind\" accecare, \"poison\" avvelenare, \"stun\" stordire, \"daze\" disorientare). The disables in lists and labels (Stun, Daze, Knockback, Knockdown, Pull, Launch, Float, Sink, Fear, Taunt) stay in English (\"Annulla lo Stun\"). Nothing else goes back to English. The attributes in \"keep\" (Power, Precision, Toughness, Vitality, Ferocity, Healing Power, Concentration, Expertise, Agony Resistance) stay in English, capitalised, never elided (\"+100 Power\", \"in base al tuo Power\"). Skill types and labels \
+\"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: English loanwords, the same in the plural (\"la rune\", \"i sigil\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\". A stat prefix in \"keep\" (\"Berserker\", \"Carrion\") stays in English without the \"'s\", after the Italian noun, with no article or preposition (\"Insegna in seta Berserker\", never \"del Berserker\"). A name before the prefix stays after it with \"di\" (\"Beigarth's Knight Insignia\" is \"Insegna Knight di Beigarth\"). An ascended item named after a person is that person's, with \"di\" and its noun in Italian (\"Zojja's Short Bow\" is \"Arco corto di Zojja\", \"Recipe: Yassith's Harpoon Gun\" is \"Ricetta: Fucile arpione di Yassith\", never \"Harpoon Gun Yassith\"). The boons and conditions in \"keep\" (Might, Fury, Quickness, Swiftness, Aegis, Bleeding, Burning, Vulnerability, Weakness...) stay in English, capitalised, never elided except the ones starting with a vowel (\"dell'Aegis\"), also where the English writes them in lowercase in a sentence (\"grant might\" is \"conferisci Might\", \"inflict bleeding\" is \"infliggi Bleeding\"); the verbs stay Italian (\"chill\" assiderare, \"cripple\" azzoppare, \"blind\" accecare, \"poison\" avvelenare, \"stun\" stordire, \"daze\" disorientare). The disables in lists and labels (Stun, Daze, Knockback, Knockdown, Pull, Launch, Float, Sink, Fear, Taunt) stay in English (\"Annulla lo Stun\"). Nothing else goes back to English. The attributes in \"keep\" (Power, Precision, Toughness, Vitality, Ferocity, Healing Power, Concentration, Expertise, Agony Resistance) stay in English, capitalised, never elided (\"+100 Power\", \"in base al tuo Power\"). Skill types and labels \
 in <c=@abilitytype> (\"Glamour.\", \"Signet Passive:\", \"Phantasms\") stay in English as the English has them, for every profession. Keep every %token%, every <tag>, every [tag] and every line \
 break exactly as they are. \"%%\" is the percent sign (\"25%%\"): never write a single \"%\", the game cuts the text there.
 
@@ -231,11 +232,10 @@ fn name_added(en: &str, old: &str, new: &str) -> bool {
     NOT_ADDED.iter().any(|n| count(new, n) > count(old, n).max(count(en, n)))
 }
 
-/// The stat prefixes of the items that are not in the API's stats (the old karma and dungeon armor),
-/// and the names of the ascended ones ("Zojja's Short Bow" is "Arco corto Zojja").
+/// The stat prefixes of the items that are not in the API's stats (the old karma and dungeon armor).
+/// Not the people the ascended items are named after: "Zojja's Short Bow" is Zojja's bow, "Arco
+/// corto di Zojja" (owner, 2026-11-13).
 const OLD_PREFIXES: &[&str] = &[
-    "Zojja", "Occam", "Grizzlemouth", "Mathilde", "Theodosus", "Hronk", "Ebonmane", "Stonecleaver", "Chorben", "Coalforge",
-    "Soros", "Leftpaw", "Beigarth", "Tateos", "Gobrech", "Ahamid",
     "Trooper", "Slayer", "Stalwart", "Inquisitor", "Commando", "Healer", "Defender", "Assaulter", "Hunter", "Vagabond",
     "Wizard", "Stout", "Hearty", "Ravaging", "Honed", "Strong", "Vital", "Precise", "Mighty", "Malign", "Vigorous", "Resilient",
 ];
@@ -538,7 +538,8 @@ mod checks {
         assert!(!prefix_with_di(&names, "Berserker's Boots", "Stivali del Berserker", "Stivali Berserker"));
         // A name that is no prefix takes its "di".
         assert!(!prefix_with_di(&names, "Tinari's Music Box", "Music box Tinari", "Carillon di Tinari"));
-        assert!(prefix_with_di(&names, "Zojja's Short Bow", "Arco corto Zojja", "Arco corto di Zojja"));
+        // The ascended items named after a person are theirs.
+        assert!(!prefix_with_di(&names, "Zojja's Short Bow", "Arco corto Zojja", "Arco corto di Zojja"));
     }
 
     #[test]
