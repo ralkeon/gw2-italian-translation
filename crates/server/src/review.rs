@@ -113,7 +113,10 @@ never \"gli Elder Dragon\" unless the English says Elder Dragon; \"the Order\" a
 stays as it is); \"the Dream\" is masculine (\"il Dream\"); \"Commander\", the player's title, stays in English \
 (\"Qual è la tua prossima mossa, Commander?\"); \"Captain\", \"General\", \"Minister\" and \"Priestess\" before a name are Italian \
 (\"il Capitano Kiel\", \"il Ministro Arton\", \"la Sacerdotessa Rhie\"), but \"Legate Minister\", \"Minister Li\", \"Queen Jennah\" and \
-\"Countess Anise\" stay in English, and so does \"Countess\" alone for Anise; \"Golemancer\" stays in English (\"Golemancer del Pact\"); a name of a place stays whole (\"Cathedral of Zephyrs\"). Never invent a word: an Italian word you are not sure \
+\"Countess Anise\" stay in English with the Italian article (\"la Queen Jennah\", \"la Countess Anise\"), and so does \"Countess\" alone for Anise; \
+the peoples are lowercase in a sentence (\"i charr\", \"i quaggan\", \"gli skritt\"); \"Separatist\" and \"Renegade\" stay in English and \
+the same in the plural (\"i Separatist\", \"Imboscatori Separatist\", \"i Renegade\"); the Spirits of the Wild stay in English (\"Bear\", \"Raven\", \
+\"Wolf\", \"Snow Leopard\": \"Scelgo Bear\"); \"Pale Tree\" is feminine (\"la Pale Tree\");\"Golemancer\" stays in English (\"Golemancer del Pact\"); a name of a place stays whole (\"Cathedral of Zephyrs\"). Never invent a word: an Italian word you are not sure \
 exists is no fix (\"Ceveno\", \"Mannaiatrice\", \"Passi di corsa\"); never change the gender a translation gave a named character \
 (\"Almorra\", \"Sayida\" are women) or the player; keep the spaces at the end of a line exactly as they are. A boon, condition or \
 attribute that the English has as a plain word in a story, a dialogue or a description stays a plain Italian word (\"the noise and \

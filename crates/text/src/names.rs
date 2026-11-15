@@ -493,6 +493,14 @@ const MECHANIC_AFTER: &[&str] = &["duration", "stack", "stacks", "on"];
 const MODAL: &[&str] = &["this", "it", "that", "they", "we", "you", "i", "he", "she", "which", "who", "there", "what"];
 /// The words after "might" that make it the boon after all ("grants you might and fury", "you might for 5 seconds").
 const NOT_A_VERB: &[&str] = &["and", "or", "for", "on", "to", "stacks", "duration", "when", "while", "whenever", "each", "per", "with"];
+/// The verbs and adverbs after "might" that make it the verb whatever comes before it: "a Priestess
+/// of Dwayna might know of a way" (a name before it, and "suffering" making the text the mechanic's).
+const MIGHT_VERBS: &[&str] = &[
+    "know", "help", "want", "need", "find", "try", "come", "go", "get", "make", "take", "see", "say", "work", "look",
+    "think", "seem", "prove", "lead", "tell", "ask", "use", "consider", "notice", "agree", "like", "remember", "learn",
+    "survive", "return", "appear", "become", "happen", "win", "die", "fall", "save", "stop", "reach", "decide", "hear",
+    "wish", "manage", "show", "also", "just", "well", "still", "even", "never", "already", "only", "actually",
+];
 
 /// The terms of `PLAIN_TOO` that `en` has only as plain words, never as the mechanic: "slow the fall",
 /// "with all their might", "the White Mantle's protection", "dwarven relics", "Power Core", "this might
@@ -550,8 +558,11 @@ pub fn prose_terms(en: &str) -> Vec<&'static str> {
                 && ![CONTEXT, OWNERS, PLAIN_AFTER, MODAL, NOT_A_NAME].iter().any(|list| list.contains(&l.as_str()))
         };
         let last = found.get(n + 1).is_none_or(|a| !next(w, a));
+        // The first word of a name with "of": "Fury of the Dead"; not "Fury of 5 seconds".
+        let of_name = after == "of" && found.get(n + 2).is_some_and(|a| a.text == "the" || name_word(a));
         let in_name = capital && !ATTRIBUTES.contains(&term) && !["focus", "relic"].contains(&term)
             && ((last && n.checked_sub(1).is_some_and(|p| tight(&found[p], w) && name_word(&found[p])))
+                || of_name
                 || (["Burning", "Bleeding"].contains(&term) && found.get(n + 1).is_some_and(|a| tight(w, a) && name_word(a))));
         // "power" is the attribute only next to gaining it: "gain power", "grants you more power",
         // "gain increased power"; not "cosmic power", "collecting more power", "may give you power".
@@ -576,6 +587,7 @@ pub fn prose_terms(en: &str) -> Vec<&'static str> {
             || (!ATTRIBUTES.contains(&term) && !MECHANIC_AFTER.contains(&after.as_str())
                 && (OWNERS.contains(&before.as_str()) || before.ends_with("'s") || before.ends_with("’s")))
             || (term == "Might" && !capital && MODAL.contains(&before.as_str()) && !after.is_empty() && !NOT_A_VERB.contains(&after.as_str()))
+            || (term == "Might" && !capital && MIGHT_VERBS.contains(&after.as_str()))
             || (term == "relic" && !capital && !en.contains("Double-click"));
         if !plain && !mechanic.contains(&term) {
             mechanic.push(term);
@@ -776,6 +788,13 @@ mod tests {
                 "un Frammento non caricato di Furia Prismatica.",
                 "un Frammento non caricato di Fury Prismatica.",
             ),
+            // 2026-11-15.
+            ("Fury of the Dead", "Furia dei morti", "Fury dei morti"),
+            (
+                "The soldier appears to be suffering from some kind of illness. A Priestess of Dwayna might know of a way to relieve the ailment.",
+                "Una sacerdotessa di Dwayna potrebbe conoscere un modo",
+                "Una Sacerdotessa di Dwayna Might conoscere un modo",
+            ),
         ];
         for (en, old, new) in wrong {
             assert!(!terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
@@ -809,6 +828,8 @@ mod tests {
             ("Initial Target Knockdown Time", "Tempo di atterramento", "Tempo di Knockdown"),
             ("Scepter Might Gain", "Aumento della potenza con lo scettro", "Aumento del Might con lo scettro"),
             ("+5 Toughness\n+9 Agony Resistance", "+5 Robustezza\n+9 Resistenza all'Agonia", "+5 Toughness\n+9 Agony Resistance"),
+            ("Gain Fury of 5 seconds.", "Ottieni furia per 5 secondi.", "Ottieni Fury per 5 secondi."),
+            ("Allies gain might and fury for 5 seconds.", "ottengono potenza e furia", "ottengono Might e Fury"),
         ];
         for (en, old, new) in right {
             assert!(terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
