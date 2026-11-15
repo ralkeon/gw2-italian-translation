@@ -490,9 +490,10 @@ fn run_bulk(db: &str, file: &str, translators_file: &str, max_texts: usize, dry_
     chain.set(bulk::order(translators(translators_file)));
     match bulk::run(&con, &chain, file, &bulk::Options { max_texts, dry_run }) {
         Ok(r) => println!(
-            "bulk: {} texts, {} known, {} names, {} copied, {} with nothing to translate, {} translated, {} rejected{}{}",
+            "bulk: {} texts, {} known, {} with new English, {} names, {} copied, {} with nothing to translate, {} translated, {} rejected{}{}",
             r.read,
             r.known,
+            r.changed,
             r.names,
             r.copied,
             r.nothing,

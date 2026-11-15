@@ -37,6 +37,9 @@ pub struct Options {
 pub struct Report {
     pub read: usize,
     pub known: usize,
+    /// IDs we have, whose English in the file is new (a patch changed it, or the map now has the
+    /// game's form with its plural marks): a new row, translated like an unknown text.
+    pub changed: usize,
     pub names: usize,
     pub copied: usize,
     pub nothing: usize,
@@ -96,6 +99,41 @@ fn read_map(file: &str) -> Result<Vec<Text>, String> {
         .collect())
 }
 
+/// Whether the file's English `file` is the English `ours` we have for that ID, or only another way
+/// of writing it that is not news: line breaks as `<br>` or as a newline (the game sends both), or
+/// the plural spelled out where we have the game's form with its marks ("Icy Sacks" for our
+/// "Icy Sack[s]"). The opposite, the marks where we have the spelled-out plural ("Phoenix Mace
+/// Skin[s]" for our old "Phoenix Mace Skins"), is the game's form we lack: not the same.
+fn same_english(ours: &str, file: &str) -> bool {
+    let (ours, file) = (ours.replace("<br>", "\n"), file.replace("<br>", "\n"));
+    ours == file || spelled_plural(&ours) == file
+}
+
+/// `en` with its plural marks resolved to the plural: "Sack[s]" -> "Sacks",
+/// `Sandwich[pl:"Sandwiches"]` -> "Sandwiches".
+fn spelled_plural(en: &str) -> String {
+    let mut out = String::with_capacity(en.len());
+    let mut rest = en;
+    while let Some(c) = rest.chars().next() {
+        if let Some(after) = rest.strip_prefix("[s]") {
+            out.push('s');
+            rest = after;
+        } else if let Some(inner) = rest.strip_prefix("[pl:\"")
+            && let Some(end) = inner.find("\"]")
+        {
+            // The mark replaces the word before it.
+            let word = out.trim_end_matches(char::is_alphabetic).len();
+            out.truncate(word);
+            out.push_str(&inner[..end]);
+            rest = &inner[end + 2..];
+        } else {
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
+}
+
 /// Writes the rows `[id, hash, en, it]` as this server's machine translations.
 fn write(con: &Connection, rows: &[(&Text, String)], dry_run: bool) -> rusqlite::Result<()> {
     if rows.is_empty() || dry_run {
@@ -116,14 +154,17 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
     let mut todo: Vec<(&Text, markup::Prepared)> = Vec::new();
     let mut quick: Vec<(&Text, String)> = Vec::new();
     let mut queued: HashSet<&str> = HashSet::new();
+    let mut ours_of = con.prepare("SELECT en FROM translations WHERE id = ?1").map_err(db)?;
     for text in &texts {
-        let known: bool = con
-            .query_row("SELECT count(*) FROM translations WHERE id = ?1", [text.id], |r| r.get::<_, i64>(0))
-            .map_err(db)?
-            > 0;
-        if known {
+        // A known ID is skipped only when its English is one we have: an ID whose English changed
+        // since (a patch, or the map's own fix) gets a row for the new English.
+        let ours: Vec<String> = ours_of.query_map([text.id], |r| r.get(0)).and_then(|rows| rows.collect()).map_err(db)?;
+        if ours.iter().any(|en| same_english(en, &text.en)) {
             report.known += 1;
             continue;
+        }
+        if !ours.is_empty() {
+            report.changed += 1;
         }
         if let Some(name) = english.whole(&text.en) {
             report.names += 1;
@@ -152,9 +193,10 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
     }
     write(con, &quick, options.dry_run).map_err(db)?;
     println!(
-        "bulk: {} texts, {} known, {} names, {} copied, {} with nothing to translate, {} to translate",
+        "bulk: {} texts, {} known, {} with new English, {} names, {} copied, {} with nothing to translate, {} to translate",
         report.read,
         report.known,
+        report.changed,
         report.names,
         report.copied,
         report.nothing,
@@ -244,6 +286,30 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
 
 #[cfg(test)]
 mod tests {
+    use super::{same_english, spelled_plural};
+
+    #[test]
+    fn plural_spelled_out() {
+        assert_eq!(spelled_plural("Icy Sack[s]"), "Icy Sacks");
+        assert_eq!(spelled_plural("Stick[s] of Cotton Candy"), "Sticks of Cotton Candy");
+        assert_eq!(spelled_plural("Roasted Meaty Sandwich[pl:\"Sandwiches\"]"), "Roasted Meaty Sandwiches");
+        assert_eq!(spelled_plural("No marks here"), "No marks here");
+    }
+
+    #[test]
+    fn new_english_only_when_it_is_news() {
+        // The same text, or only written another way: no new row.
+        assert!(same_english("Upset Stomach", "Upset Stomach"));
+        assert!(same_english("+5%% Strike Damage<br>+2%% Power", "+5%% Strike Damage\n+2%% Power"));
+        assert!(same_english("+5%% Strike Damage\n+2%% Power", "+5%% Strike Damage<br>+2%% Power"));
+        assert!(same_english("Icy Sack[s]", "Icy Sacks"));
+        // The game's form with its marks where we only have the spelled-out plural: news.
+        assert!(!same_english("Phoenix Mace Skins", "Phoenix Mace Skin[s]"));
+        assert!(!same_english("Roasted Meaty Sandwiches", "Roasted Meaty Sandwich[pl:\"Sandwiches\"]"));
+        // A patch changed the text: news.
+        assert!(!same_english("Reduces incoming condition duration.", "Increases outgoing healing."));
+    }
+
     #[test]
     fn map_hash_is_the_game_s() {
         // Row 1102280 as the game sent it to the addons.
