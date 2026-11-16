@@ -560,10 +560,12 @@ pub fn prose_terms(en: &str) -> Vec<&'static str> {
         let last = found.get(n + 1).is_none_or(|a| !next(w, a));
         // The first word of a name with "of": "Fury of the Dead"; not "Fury of 5 seconds".
         let of_name = after == "of" && found.get(n + 2).is_some_and(|a| a.text == "the" || name_word(a));
+        // "Poison Pod": the noun "Poison" before a thing, like "Burning Spore".
+        let before_thing = ["Burning", "Bleeding"].contains(&term) || (term == "Poisoned" && w.text == "Poison");
         let in_name = capital && !ATTRIBUTES.contains(&term) && !["focus", "relic"].contains(&term)
             && ((last && n.checked_sub(1).is_some_and(|p| tight(&found[p], w) && name_word(&found[p])))
                 || of_name
-                || (["Burning", "Bleeding"].contains(&term) && found.get(n + 1).is_some_and(|a| tight(w, a) && name_word(a))));
+                || (before_thing && found.get(n + 1).is_some_and(|a| tight(w, a) && name_word(a))));
         // "power" is the attribute only next to gaining it: "gain power", "grants you more power",
         // "gain increased power"; not "cosmic power", "collecting more power", "may give you power".
         let gained = |s: &str| POWER_GAIN.contains(&s) || s.starts_with(|c: char| c.is_ascii_digit());
@@ -579,6 +581,8 @@ pub fn prose_terms(en: &str) -> Vec<&'static str> {
             || (!capital && !ATTRIBUTES.contains(&term) && before == "of" && !before2.is_empty() && !HOW_MUCH.contains(&before2))
             || PLAIN_AFTER.contains(&after.as_str())
             || (!capital && after == "of")
+            // "what do you need protection from?": a boon needed or wanted is a plain word.
+            || (!capital && !ATTRIBUTES.contains(&term) && NEEDS.contains(&before.as_str()))
             // "to find a weakness": a boon or condition takes no "a".
             || (!capital && !ATTRIBUTES.contains(&term) && !["focus", "relic"].contains(&term) && ["a", "an"].contains(&before.as_str()))
             || (term != "focus" && THINGS.contains(&after.as_str()))
@@ -617,6 +621,8 @@ const POWER_THINGS: &[&str] = &[
     "conduit", "conduits", "crystal", "crystals", "line", "lines", "surge", "outage", "level", "levels", "struggle",
     "converter", "converters", "suit", "suits",
 ];
+/// The words before a lowercase boon or condition that make it a plain word: "you need protection".
+const NEEDS: &[&str] = &["need", "needs", "needed", "want", "wants", "wanted"];
 /// The words before "resolution" that make it the screen's: "at a resolution smaller", "a higher resolution".
 const RESOLUTION_BEFORE: &[&str] = &["a", "an", "higher", "lower", "screen", "display", "native", "full", "render", "texture", "the"];
 /// The words before "of" that keep a boon or condition the mechanic: "stacks of might", "5 seconds of fury".
@@ -795,6 +801,9 @@ mod tests {
                 "Una sacerdotessa di Dwayna potrebbe conoscere un modo",
                 "Una Sacerdotessa di Dwayna Might conoscere un modo",
             ),
+            // 2026-11-16.
+            ("With all the Pact nearby, what do you need protection from?", "hai bisogno di protezione?", "hai bisogno di Protection?"),
+            ("Poison Pod", "Baccello velenoso", "Baccello di Poisoned"),
         ];
         for (en, old, new) in wrong {
             assert!(!terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
@@ -830,6 +839,8 @@ mod tests {
             ("+5 Toughness\n+9 Agony Resistance", "+5 Robustezza\n+9 Resistenza all'Agonia", "+5 Toughness\n+9 Agony Resistance"),
             ("Gain Fury of 5 seconds.", "Ottieni furia per 5 secondi.", "Ottieni Fury per 5 secondi."),
             ("Allies gain might and fury for 5 seconds.", "ottengono potenza e furia", "ottengono Might e Fury"),
+            ("Poison Damage +10%", "Danni da veleno +10%", "Danni da Poison +10%"),
+            ("Grant protection to allies who need it.", "Conferisci protezione", "Conferisci Protection"),
         ];
         for (en, old, new) in right {
             assert!(terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
