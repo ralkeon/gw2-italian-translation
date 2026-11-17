@@ -68,7 +68,8 @@ Se i testi restano in inglese:
 
 ### Ibrida o tutto in italiano
 
-Nelle opzioni dell'addon in Nexus c'è la casella **Tutto in italiano**:
+La traduzione può essere ibrida o completamente in italiano. Per attivare la versione tutta in
+italiano: Nexus → opzioni di **Italian Translation** → casella **Tutto in italiano**.
 - **spenta** (traduzione ibrida, la scelta di partenza): i nomi di abilità, tratti,
   specializzazioni, luoghi, fazioni, boon e condition restano in inglese, come li dicono di solito
   i giocatori italiani e come li trovi nelle guide e sulla wiki;
@@ -77,12 +78,22 @@ Nelle opzioni dell'addon in Nexus c'è la casella **Tutto in italiano**:
   La variante si completa giorno dopo giorno: i testi non ancora pronti si vedono come
   nell'ibrida.
 
-Il cambio vale subito, senza riavviare. Per cercare un nome in inglese (sulla wiki, in chat) puoi
-spegnere un attimo la traduzione con il tasto di Text Translator.
+Il cambio vale subito, senza riavviare.
 
 Impostazioni e traduzioni stanno in `Guild Wars 2/addons/italian_translation/`
 (`config.toml` e `strings.db`). Per non condividere le traduzioni con il database globale metti
 `enabled = false` nella sezione `[sync]` di `config.toml`.
+
+### Quando parli con altri giocatori, usa i nomi inglesi
+
+Con qualunque variante, quando scrivi in chat, chiedi aiuto, partecipi a una discussione, cerchi
+sulla wiki o in una guida, o segnali un problema, usa sempre il nome originale inglese, non quello
+tradotto: la maggior parte dei giocatori (anche italiani) conosce e usa quelli, e le guide e la
+wiki sono in inglese.
+
+Per vederlo, assegna in Nexus un tasto a **Show Translated Text** di Text Translator: premendolo
+il gioco torna un attimo in inglese, ripremendolo ritorna la traduzione. L'addon intanto continua
+a raccogliere e tradurre i testi in background.
 
 ## Stato del progetto
 
