@@ -881,9 +881,9 @@ fn user(app: &App, request: &Request) -> Result<User, HttpError> {
     }
 }
 
-/// POST /sync {since, rows: [[id, hash, en, it, status]...], gsince, glossary, nsince}
+/// POST /sync {since, rows: [[id, hash, en, it, status]...], gsince, glossary, nsince, usince, fsince}
 ///   -> {rows: [[id, hash, en, it, status, author, seq]...], seq, more, next_s, accepted,
-///       glossary, gseq, gmore, names: [name...], nseq}
+///       glossary, gseq, gmore, names: [name...], nseq, unnames, useq, full: [[id, hash, it, seq]...], fseq, fmore}
 fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
     let User { token_hash, name, level } = user(app, request)?;
     limit(app, format!("sync:{token_hash}"), RATE)?;
@@ -985,8 +985,15 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
         Some(usince) => names::removed(&db, usince)?,
         None => (Vec::new(), 0),
     };
+    // The all-Italian variant's rows (full.rs) changed after `fsince`, to an addon that asks (older
+    // ones do not know them): [id, hash, it, seq]; an empty `it` is a row taken out.
+    let (full_rows, fseq, fmore) = match input["fsince"].as_i64() {
+        Some(fsince) => full::pull(&db, fsince.max(0), PULL_MAX)?,
+        None => (Vec::new(), 0, false),
+    };
     Ok(json!({
         "rows": pulled, "seq": seq, "more": more, "next_s": NEXT_S, "accepted": rows.len(),
         "glossary": terms, "gseq": gseq, "gmore": gmore, "names": english, "nseq": nseq, "unnames": unnames, "useq": useq,
+        "full": full_rows, "fseq": fseq, "fmore": fmore,
     }))
 }

@@ -200,6 +200,19 @@ pub fn usable(hybrid: &str, answer: &str, swap: &[(String, String, String)]) -> 
         && swap.iter().all(|(en, it, _)| !kept(answer, en) || kept(it, en))
 }
 
+/// What changed in `full` after `since`, oldest first, at most `max`: ([id, hash, it, seq]..., the last seq,
+/// more). An empty `it` is a row taken out. For /sync (main.rs), to an addon that asks (`fsince`).
+pub fn pull(con: &Connection, since: i64, max: i64) -> rusqlite::Result<(Vec<Value>, i64, bool)> {
+    con.execute_batch(SCHEMA)?;
+    let mut stmt = con.prepare_cached("SELECT id, hash, it, seq FROM full WHERE seq > ?1 ORDER BY seq LIMIT ?2")?;
+    let rows: Vec<Value> = stmt
+        .query_map(params![since, max], |r| Ok(json!([r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?])))?
+        .collect::<rusqlite::Result<_>>()?;
+    let seq = rows.last().and_then(|r| r[3].as_i64()).unwrap_or(since);
+    let more = rows.len() as i64 == max;
+    Ok((rows, seq, more))
+}
+
 pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Result<Report, String> {
     let db = |e: rusqlite::Error| format!("database: {e}");
     con.execute_batch(SCHEMA).map_err(db)?;
@@ -225,7 +238,8 @@ pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Res
     }
 
     let made: HashMap<(i64, String), (String, String)> = {
-        let mut stmt = con.prepare("SELECT id, hash, base, source FROM full").map_err(db)?;
+        // A row taken out (source gone) is kept as an empty one for the addons to delete theirs: not "made".
+        let mut stmt = con.prepare("SELECT id, hash, base, source FROM full WHERE source <> 'gone'").map_err(db)?;
         stmt.query_map([], |r| Ok(((r.get(0)?, r.get(1)?), (r.get(2)?, r.get(3)?)))).map_err(db)?.collect::<rusqlite::Result<_>>().map_err(db)?
     };
     let rows: Vec<(i64, String, String, String)> = {
@@ -303,7 +317,13 @@ pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Res
     if !options.dry_run {
         let tx = con.unchecked_transaction().map_err(db)?;
         for (id, hash) in &drop {
-            tx.execute("DELETE FROM full WHERE id = ?1 AND hash = ?2", params![id, hash]).map_err(db)?;
+            // Emptied, not deleted: the addons that have it take it out on their next sync.
+            tx.execute(
+                "UPDATE full SET it = '', base = '', source = 'gone', at = ?3, seq = (SELECT coalesce(max(seq), 0) FROM full) + 1
+                 WHERE id = ?1 AND hash = ?2",
+                params![id, hash, now],
+            )
+            .map_err(db)?;
         }
         tx.commit().map_err(db)?;
         write(&names_out, "name")?;
@@ -411,8 +431,15 @@ mod tests {
         con.execute("UPDATE translations SET it = 'Conferisci Might a tutti gli alleati.' WHERE id = 2", []).unwrap();
         let r = run(&con, n, t, &Options { max_texts: 10, dry_run: false, by_hand: None }).unwrap();
         assert_eq!((r.stale, r.to_rewrite), (1, 1));
-        let left: i64 = con.query_row("SELECT count(*) FROM full WHERE id = 2", [], |r| r.get(0)).unwrap();
-        assert_eq!(left, 0);
+        // Emptied, not deleted: the addons take it out; it goes to them by /sync after the name row.
+        let (it, source): (String, String) = con.query_row("SELECT it, source FROM full WHERE id = 2", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((it.as_str(), source.as_str()), ("", "gone"));
+        let (rows, seq, more) = pull(&con, 0, 10).unwrap();
+        assert_eq!((rows.len(), more), (2, false));
+        assert_eq!(rows.last().unwrap()[2], "");
+        assert_eq!(pull(&con, seq, 10).unwrap().0.len(), 0);
+        // Taken out once only: the next run does not count it again.
+        assert_eq!(run(&con, n, t, &Options { max_texts: 10, dry_run: false, by_hand: None }).unwrap().stale, 0);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
