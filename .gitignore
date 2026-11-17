@@ -13,3 +13,6 @@ contributor.json
 
 # GW1 official texts (ArenaNet) and the local tool that reads them
 full/gw1/
+
+# Working files of the full-Italian names (official de/fr/es names inside: ArenaNet text)
+full/names_work/
