@@ -38,7 +38,9 @@ pub struct Options {
 /// The translations given by hand (the translator agent, Claude Code on a subscription):
 /// `AskTo(file)`: the texts to translate go into the file, one JSON line each: {"id", "hash", "en",
 /// "src": the text as the translators get it (markup as <x id="N"/> tags), "terms": the glossary's
-/// [en, it] in it, "keep": the names in it that stay English}; nothing is written to the database.
+/// [en, it] in it, "keep": the names in it that stay English, "refs": what others made of the text,
+/// to understand it (the game's fr/es/de, the Local Translator's Italian, GW1 names: refs.rs)};
+/// nothing is written to the database.
 /// `Answers(file)`: the same lines with "answer": the Italian of "src", tags kept. Each answer goes
 /// through what a translator's answer goes through (markup put back and checked, the glossary's fix,
 /// the plural marks) and is written as `byhand`: above the review and the names job (priority.rs),
@@ -99,7 +101,7 @@ fn read(file: &str) -> Result<Vec<Text>, String> {
 }
 
 /// The texts of the Local Translator module's map (`texts(key, en, ...)`, its release "mappa"):
-/// only the ID and the English, never its Italian; the hash is ours. Texts without a letter
+/// only the ID and the English (its Italian is only a reference for the agents: refs.rs); the hash is ours. Texts without a letter
 /// (placeholders, numbers) are left out.
 fn read_map(file: &str) -> Result<Vec<Text>, String> {
     let con = Connection::open_with_flags(file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| format!("cannot open {file}: {e}"))?;
@@ -240,10 +242,14 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
         Some(ByHand::AskTo(file)) => {
             use std::io::Write;
             let mut out = std::fs::OpenOptions::new().create(true).append(true).open(file).map_err(|e| format!("{file}: {e}"))?;
+            let refs = crate::refs::Refs::open(con.path(), true);
             for (text, prepared) in &todo {
                 let terms: Vec<[&str; 2]> = glossary::relevant(&terms, &[&text.en]).iter().map(|t| [t.en.as_str(), t.it.as_str()]).collect();
                 let keep: Vec<&str> = english.find(&text.en).iter().map(|&(a, b)| &text.en[a..b]).collect();
-                let line = json!({"id": text.id, "hash": text.hash, "en": text.en, "src": prepared.xml, "terms": terms, "keep": keep});
+                let mut line = json!({"id": text.id, "hash": text.hash, "en": text.en, "src": prepared.xml, "terms": terms, "keep": keep});
+                if let Some(r) = refs.of(text.id as i64, &text.en, |e| same_english(e, &text.en) || same_english(&text.en, e)) {
+                    line["refs"] = r;
+                }
                 writeln!(out, "{line}").map_err(|e| format!("{file}: {e}"))?;
             }
             println!("bulk: {} texts to translate by hand written to {file}", todo.len());

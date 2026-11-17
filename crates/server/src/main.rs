@@ -51,6 +51,7 @@ mod lt_sync;
 mod byhand;
 mod plurals;
 mod priority;
+mod refs;
 mod replicate;
 mod review;
 mod sign;

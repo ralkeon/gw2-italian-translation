@@ -10,7 +10,8 @@
 //!   written at once with the full variant's Italian (`source` name).
 //! - The others need a rewrite: the English words out, the Italian ones in, articles and agreement fixed.
 //!   `--ask-to <file>` writes them, one JSON line each ({"id", "hash", "en", "it": the hybrid Italian,
-//!   "swap": [[English, Italian, kind]...]}), up to --max-texts; `--answers <file>` reads {"hash", "id",
+//!   "swap": [[English, Italian, kind]...], "refs": the Local Translator's Italian and GW1 names, to
+//!   understand only: refs.rs}), up to --max-texts; `--answers <file>` reads {"hash", "id",
 //!   "answer"} lines and writes each answer that keeps the markup and the plural marks and has none of
 //!   the English words left (`source` hand). The full-Italian agent answers them (agent/AGENT-full.md).
 //!
@@ -334,9 +335,14 @@ pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Res
         Some(ByHand::AskTo(file)) => {
             use std::io::Write;
             let mut out = std::fs::OpenOptions::new().create(true).append(true).open(file).map_err(|e| format!("{file}: {e}"))?;
+            let refs = crate::refs::Refs::open(con.path(), false);
             for t in todo.iter().take(options.max_texts) {
                 let swap: Vec<[&str; 3]> = t.swap.iter().map(|(e, i, k)| [e.as_str(), i.as_str(), k.as_str()]).collect();
-                writeln!(out, "{}", json!({"id": t.id, "hash": t.hash, "en": t.en, "it": t.it, "swap": swap})).map_err(|e| format!("{file}: {e}"))?;
+                let mut line = json!({"id": t.id, "hash": t.hash, "en": t.en, "it": t.it, "swap": swap});
+                if let Some(r) = refs.of(t.id, &t.en, |e| e.replace("<br>", "\n") == t.en.replace("<br>", "\n")) {
+                    line["refs"] = r;
+                }
+                writeln!(out, "{line}").map_err(|e| format!("{file}: {e}"))?;
                 report.asked += 1;
             }
         }
