@@ -359,6 +359,10 @@ const VERBS: &[&str] = &[
     "ottenendo", "azzoppa", "azzoppare", "assidera", "assiderare", "acceca", "accecare",
 ];
 
+/// The stems of the verbs of conditions and disables that stay Italian (cripple azzoppare, daze
+/// disorientare, slow rallentare): a rewrite never swaps them for the term.
+const KEPT_VERBS: &[&str] = &["azzopp", "assider", "accec", "avvelen", "stord", "disorient", "rallent", "immobilizz", "indebol"];
+
 /// Whether the rewrite `new` of `old` only swaps Italian for the English of `en`: no Italian word
 /// `old` did not have but articles and prepositions (", conferendo Might." added at the end), and
 /// something of `old` taken out for what came in (a name put next to its translation, not in its
@@ -370,6 +374,13 @@ pub(crate) fn swaps_only(en: &str, old: &str, new: &str, keep: &[&str]) -> bool 
         ws.iter().filter(|w| w.chars().count() > 5 && (w.ends_with("ando") || w.ends_with("endo")) && !["quando", "comando"].contains(&w.as_str())).count()
     };
     if gerunds(&new_words) < gerunds(&old_words) {
+        return false;
+    }
+    // "disorienta i nemici" become "Daze ai nemici", "rallentare" become "Slow": these verbs stay.
+    // Not the nouns ("stordimento" may become "Stun" in a list of disables).
+    let noun = |w: &str| ["mento", "menti", "zione", "zioni"].iter().any(|e| w.ends_with(e));
+    let kept = |ws: &[String]| ws.iter().filter(|w| !noun(w) && KEPT_VERBS.iter().any(|v| w.starts_with(v))).count();
+    if kept(&new_words) < kept(&old_words) {
         return false;
     }
     // The names and terms in any of their forms ("conditions" in the English, "condition" here).
@@ -608,6 +619,13 @@ mod tests {
         let en = "Lunge forward, weakening and burning any foes left in your wake.";
         assert!(!swaps_only(en, "Scatta, indebolendo e bruciando tutti i nemici.", "Scatta, indebolendo e Burning tutti i nemici.", &["Burning"]));
         assert!(swaps_only(en, "Scatta, indebolendo e bruciando tutti i nemici.", "Scatta, indebolendo e infliggendo Burning a tutti i nemici.", &["Burning"]));
+        // 2026-11-17: the verbs of daze and slow stay; a noun in a list of disables may go.
+        let en = "Damage and Daze enemies with a powerful screech.";
+        assert!(!swaps_only(en, "Infliggi danni e disorienta i nemici con un potente stridio.", "Infliggi danni e Daze ai nemici con un potente stridio.", &["Daze"]));
+        let en = "<c=@abilitytype>Survival.</c> Use mud to cripple, slow, and immobilize foes.";
+        let old = "<c=@abilitytype>Survival.</c> Usa il fango per azzoppare, rallentare e immobilizzare i nemici.";
+        assert!(!swaps_only(en, old, "<c=@abilitytype>Survival.</c> Usa il fango per azzoppare, Slow e immobilizzare i nemici.", &["Slow"]));
+        assert!(swaps_only("Stuns • Causes Vulnerability", "Stordimento • Provoca vulnerabilità", "Stun • Provoca Vulnerability", &["Stun", "Vulnerability"]));
     }
 
     #[test]

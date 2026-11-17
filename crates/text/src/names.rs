@@ -477,9 +477,10 @@ const PLAIN_AFTER: &[&str] = &[
     "the", "a", "an", "your", "their", "his", "her", "its", "our", "my", "them", "him", "us", "me", "this", "that",
     "these", "those", "be", "have", "not", "has", "had", "was", "were",
 ];
-/// The things after one that make it a plain noun ("Power Core", "Power Source"); not the focus ("Focus Core").
+/// The things after one that make it a plain noun ("Power Core", "Power Source", "Protection Spell"); not the focus ("Focus Core").
 const THINGS: &[&str] = &[
     "core", "cores", "source", "sources", "generator", "generators", "regulator", "regulators", "cell", "cells", "supply", "station",
+    "spell", "spells",
 ];
 /// The terms that are verbs too, and the words after them that make them the verb ("fear nearby foes",
 /// "slow enemies", "focus on"): the verbs stay Italian.
@@ -581,6 +582,8 @@ pub fn prose_terms(en: &str) -> Vec<&'static str> {
             || (!capital && !ATTRIBUTES.contains(&term) && before == "of" && !before2.is_empty() && !HOW_MUCH.contains(&before2))
             || PLAIN_AFTER.contains(&after.as_str())
             || (!capital && after == "of")
+            // "Fixed. Focused. Concentration!": a word alone in its sentence, in a text of no mechanic, is a cry.
+            || (capital && !context && back.is_empty() && after.is_empty())
             // "what do you need protection from?": a boon needed or wanted is a plain word.
             || (!capital && !ATTRIBUTES.contains(&term) && NEEDS.contains(&before.as_str()))
             // "to find a weakness": a boon or condition takes no "a".
@@ -619,7 +622,7 @@ const POWER_GAIN: &[&str] = &["gain", "gains", "gaining", "grant", "grants", "gr
 const POWER_THINGS: &[&str] = &[
     "charge", "charges", "grid", "inverter", "inverters", "matrix", "matrices", "orb", "orbs", "plant", "node", "nodes",
     "conduit", "conduits", "crystal", "crystals", "line", "lines", "surge", "outage", "level", "levels", "struggle",
-    "converter", "converters", "suit", "suits",
+    "converter", "converters", "suit", "suits", "overload", "overloads",
 ];
 /// The words before a lowercase boon or condition that make it a plain word: "you need protection".
 const NEEDS: &[&str] = &["need", "needs", "needed", "want", "wants", "wanted"];
@@ -804,6 +807,11 @@ mod tests {
             // 2026-11-16.
             ("With all the Pact nearby, what do you need protection from?", "hai bisogno di protezione?", "hai bisogno di Protection?"),
             ("Poison Pod", "Baccello velenoso", "Baccello di Poisoned"),
+            // 2026-11-17.
+            ("Fixed. Focused. Concentration!", "Fissato. Focalizzato. Concentrazione!", "Fissato. Focalizzato. Concentration!"),
+            ("Fix. Focus. Concentration.", "Fissa. Metti a fuoco. Concentrazione.", "Fissa. Focus. Concentration."),
+            ("Power Overload", "Sovraccarico di potere", "Sovraccarico di Power"),
+            ("Protection Spell", "Incantesimo di protezione", "Incantesimo di Protection"),
         ];
         for (en, old, new) in wrong {
             assert!(!terms_brought_in(&Names::new(["Soldier's Focus"]), en, old, new).is_empty(), "{en:?}: {new:?}");
@@ -832,6 +840,7 @@ mod tests {
             ("Your next attack inflicts a stack of weakness.", "infligge un accumulo di debolezza", "infligge un accumulo di Weakness"),
             ("Inflicts Bleeding • Immobilizes", "Provoca sanguinamento • Immobilizza", "Provoca Bleeding • Immobilizza"),
             ("Causes Fear", "Provoca paura", "Provoca Fear"),
+            ("Might. Gain might for 5 seconds.", "Potenza. Ottieni potenza per 5 secondi.", "Might. Ottieni Might per 5 secondi."),
             ("Your Might stacks last longer.", "I tuoi accumuli di potenza", "I tuoi accumuli di Might"),
             ("Increased Burning Duration", "Durata della bruciatura aumentata", "Durata del Burning aumentata"),
             ("Initial Target Knockdown Time", "Tempo di atterramento", "Tempo di Knockdown"),

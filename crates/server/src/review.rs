@@ -93,7 +93,7 @@ dei Lightborne\"); \"Slumbering\" in an item name is \"sopito\" (\"Spada d'ossid
 (\"You were poisoned\" is \"Sei stato avvelenato\", \"knock back your foes\" is \"respingere i nemici\", never \"Sei stato \
 Poisoned\" or \"infliggere Knockback\"), and so does a noun made from it (\"Mark of Immobilization\" is \"Marchio dell'immobilizzazione\", \
 never \"Marchio di Immobilize\"; \"Poison Pod\" is \"Baccello velenoso\"). An attribute stays in English only as the attribute (\"Expertise in Torch \
-Crafting\" is \"Competenza nella creazione di torce\"). The player (%str1%, \"you\") has no gender in the English: never \
+Crafting\" is \"Competenza nella creazione di torce\", \"Healing Reduction\" is \"Riduzione della cura\"). The player (%str1%, \"you\") has no gender in the English: never \
 change the gender the translation gave them. The title of a done achievement stays in the past (\"Defeated X\" is \
 \"Sconfitto X\" or \"Hai sconfitto X\", never \"Sconfiggi X\"), and a participle agrees with its subject (\"I rampicanti \
 sono stati distrutti\").
@@ -112,19 +112,21 @@ add a name that is not in the English, and never add an English plural -s to an 
 \"Mouth of Mordremoth\" is feminine (\"la Mouth of Mordremoth\", \"sconfitta\"). \"the dragons\" are \"i draghi\", \
 never \"gli Elder Dragon\" unless the English says Elder Dragon; \"the Order\" alone is \"l'Ordine\" (\"Agente dei Whispers\" \
 stays as it is); \"the Dream\" is masculine (\"il Dream\"); \"Commander\", the player's title, stays in English \
-(\"Qual è la tua prossima mossa, Commander?\"); \"Captain\", \"General\", \"Minister\" and \"Priestess\" before a name are Italian \
+(\"Qual è la tua prossima mossa, Commander?\"), the other commanders are Italian (\"Lane commanders\" is \"Comandanti di corsia\"); \
+a \"Backpiece\" is a \"Dorso\" (\"Dorso di Xera del Guaritore\");\"Captain\", \"General\", \"Minister\" and \"Priestess\" before a name are Italian \
 (\"il Capitano Kiel\", \"il Ministro Arton\", \"la Sacerdotessa Rhie\"), but \"Legate Minister\", \"Minister Li\", \"Queen Jennah\" and \
 \"Countess Anise\" stay in English with the Italian article (\"la Queen Jennah\", \"la Countess Anise\"), and so does \"Countess\" alone for Anise; \
 the peoples are lowercase in a sentence (\"i charr\", \"i quaggan\", \"gli skritt\"); \"Separatist\" and \"Renegade\" stay in English and \
 the same in the plural (\"i Separatist\", \"Imboscatori Separatist\", \"i Renegade\"); the Spirits of the Wild stay in English, each by \
-the name the English gives it (\"Scelgo Bear\", \"Heart of the Snow Leopard\" is \"Cuore di Snow Leopard\", never \"Cuore di Bear\"); \"Pale Tree\" \
+the name the English gives it (\"Scelgo Bear\", \"Heart of the Snow Leopard\" is \"Cuore di Snow Leopard\"), never the name of another \
+Spirit, and the other spirits are Italian (\"Flight of the Eagle Spirit\" is \"Volo dello spirito dell'aquila\"); \"Pale Tree\" \
 is feminine (\"la Pale Tree\"), and \"Mother Tree\" stays \"la Mother Tree\", never swapped for Pale Tree; \"Golemancer\" stays in English (\"Golemancer del Pact\"); a name of a place stays whole (\"Cathedral of Zephyrs\"). Never invent a word: an Italian word you are not sure \
 exists is no fix (\"Ceveno\", \"Mannaiatrice\", \"Passi di corsa\"); never change the gender a translation gave a named character \
 (\"Almorra\", \"Sayida\" are women) or the player; keep the spaces at the end of a line exactly as they are. A boon, condition or \
 attribute that the English has as a plain word in a story, a dialogue or a description stays a plain Italian word (\"the noise and \
 fury\" is \"il rumore e la furia\", \"frozen in fear\" is \"paralizzato dalla paura\", \"cosmic power\" is \"potere cosmico\", \
 \"expect resistance\" is \"aspettati resistenza\", \"prevent being burned\" is \"evita di bruciarti\").
-\"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: English loanwords, the same in the plural (\"la rune\", \"i sigil\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\"; an old object found or studied is no upgrade (\"dwarven relics\" are \"reliquie naniche\", \"Dwarven Relic\" is \"Reliquia nanica\"). A stat prefix in \"keep\" (\"Berserker\", \"Carrion\") stays in English without the \"'s\", after the Italian noun, with no article or preposition (\"Insegna in seta Berserker\", never \"del Berserker\"). A name before the prefix stays after it with \"di\" (\"Beigarth's Knight Insignia\" is \"Insegna Knight di Beigarth\"). An ascended item named after a person is that person's, with \"di\" and its noun in Italian (\"Zojja's Short Bow\" is \"Arco corto di Zojja\", \"Recipe: Yassith's Harpoon Gun\" is \"Ricetta: Fucile arpione di Yassith\", never \"Harpoon Gun Yassith\"). The boons and conditions in \"keep\" (Might, Fury, Quickness, Swiftness, Aegis, Bleeding, Burning, Vulnerability, Weakness...) stay in English, capitalised, never elided except the ones starting with a vowel (\"dell'Aegis\"), also where the English writes them in lowercase in a sentence (\"grant might\" is \"conferisci Might\", \"inflict bleeding\" is \"infliggi Bleeding\"); the verbs stay Italian (\"chill\" assiderare, \"cripple\" azzoppare, \"blind\" accecare, \"poison\" avvelenare, \"stun\" stordire, \"daze\" disorientare). The disables in lists and labels (Stun, Daze, Knockback, Knockdown, Pull, Launch, Float, Sink, Fear, Taunt) stay in English (\"Annulla lo Stun\"). Nothing else goes back to English. The attributes in \"keep\" (Power, Precision, Toughness, Vitality, Ferocity, Healing Power, Concentration, Expertise, Agony Resistance) stay in English, capitalised, never elided (\"+100 Power\", \"in base al tuo Power\"). Skill types and labels \
+\"Black Lion\" in \"keep\" is the name of the company: it stays in English and does not change, with no article or preposition before it (\"forziere Black Lion\", \"statuetta Black Lion\", \"biglietto di riscatto Black Lion\", never \"del Leone Nero\"); \"Black Lion Trading Company\" stays whole in English. \"focus\" in \"keep\" is the off-hand weapon: it stays in English as an Italian loanword, masculine and the same in the plural (\"il focus\", \"i focus\", \"Focus Spindrift\", \"skin per focus\"), never \"focalizzatore\" or \"concentrazione\". \"rune\", \"sigil\" and \"relic\" in \"keep\" are the upgrades: English loanwords, the same in the plural (\"la rune\", \"i sigil\", \"le relic\"), never \"runa\", \"sigillo\", \"reliquia\"; an old object found or studied is no upgrade (\"dwarven relics\" are \"reliquie naniche\", \"Dwarven Relic\" is \"Reliquia nanica\"). A stat prefix in \"keep\" (\"Berserker\", \"Carrion\") stays in English without the \"'s\", after the Italian noun, with no article or preposition (\"Insegna in seta Berserker\", never \"del Berserker\"). A name before the prefix stays after it with \"di\" (\"Beigarth's Knight Insignia\" is \"Insegna Knight di Beigarth\"). An ascended item named after a person is that person's, with \"di\" and its noun in Italian (\"Zojja's Short Bow\" is \"Arco corto di Zojja\", \"Recipe: Yassith's Harpoon Gun\" is \"Ricetta: Fucile arpione di Yassith\", never \"Harpoon Gun Yassith\"). The boons and conditions in \"keep\" (Might, Fury, Quickness, Swiftness, Aegis, Bleeding, Burning, Vulnerability, Weakness...) stay in English, capitalised, never elided except the ones starting with a vowel (\"dell'Aegis\"), also where the English writes them in lowercase in a sentence (\"grant might\" is \"conferisci Might\", \"inflict bleeding\" is \"infliggi Bleeding\"); the verbs stay Italian (\"chill\" assiderare, \"cripple\" azzoppare, \"blind\" accecare, \"poison\" avvelenare, \"stun\" stordire, \"daze\" disorientare). The disables in lists and labels (Stun, Daze, Knockback, Knockdown, Pull, Launch, Float, Sink, Fear, Taunt) stay in English (\"Annulla lo Stun\"). In the labels of a creature, joined by •, the verbs stay Italian (\"Pulls • Confuses\" is \"Tira • Confonde\", \"Cripples\" is \"Azzoppa\"); a condition named in a stat stays in English (\"+5%% Chill Duration\" is \"+5%% Durata di Chill\", never \"assideramento\"). Nothing else goes back to English. The attributes in \"keep\" (Power, Precision, Toughness, Vitality, Ferocity, Healing Power, Concentration, Expertise, Agony Resistance) stay in English, capitalised, never elided (\"+100 Power\", \"in base al tuo Power\"). Skill types and labels \
 in <c=@abilitytype> (\"Glamour.\", \"Signet Passive:\", \"Phantasms\") stay in English as the English has them, for every profession. Keep every %token%, every <tag>, every [tag] and every line \
 break exactly as they are. \"%%\" is the percent sign (\"25%%\"): never write a single \"%\", the game cuts the text there.
 
@@ -223,13 +225,37 @@ fn check(names: &Names, terms: &[Term], text: &Text, new: &str, mechanic: bool, 
     if name_added(en, old, new) {
         return Some("a name added that the English does not have");
     }
+    if attribute_added(en, old, new) {
+        return Some("an attribute added that the English does not have");
+    }
     None
+}
+
+/// The attributes, that the English always writes as words: "Healing Reduction" is "Riduzione della
+/// cura", never "Riduzione della Healing Power".
+const ATTRIBUTES: &[(&str, &[&str])] = &[
+    ("Power", &["power"]),
+    ("Precision", &["precision"]),
+    ("Toughness", &["toughness"]),
+    ("Vitality", &["vitality"]),
+    ("Ferocity", &["ferocity"]),
+    ("Concentration", &["concentration"]),
+    ("Expertise", &["expertise"]),
+];
+
+/// Whether `new` has an attribute more times than `old` while the English `en` has no word of it.
+fn attribute_added(en: &str, old: &str, new: &str) -> bool {
+    let count = |s: &str, w: &str| s.split(|c: char| !c.is_alphanumeric()).filter(|x| x.eq_ignore_ascii_case(w)).count();
+    ATTRIBUTES.iter().any(|(term, forms)| {
+        count(new, term) > count(old, term) && forms.iter().all(|f| count(en, f) == 0)
+    })
 }
 
 /// The longer names a fix tends to put where the English has a plain or shorter word: "the dragons"
 /// are "i draghi", not "gli Elder Dragon"; "Whispers Agent" and "the Order" do not say "Order of
-/// Whispers"; "Priory scholars" and "the Order" are not the "Durmand Priory".
-const NOT_ADDED: &[&str] = &["elder dragon", "order of whispers", "durmand priory"];
+/// Whispers"; "Priory scholars" and "the Order" are not the "Durmand Priory"; "Flight of the Eagle
+/// Spirit" and "Heart of the Snow Leopard" have no "Bear" (the prompt's example).
+const NOT_ADDED: &[&str] = &["elder dragon", "order of whispers", "durmand priory", "bear"];
 
 /// Whether `new` has one of `NOT_ADDED` more times than both `old` and the English `en`.
 fn name_added(en: &str, old: &str, new: &str) -> bool {
@@ -568,5 +594,18 @@ mod checks {
         // The name where the English has it.
         assert!(!name_added("The Elder Dragons are waking.", "I draghi anziani si risvegliano.", "Gli Elder Dragon si risvegliano."));
         assert!(!name_added("Why do they worship the dragons?", "Perché adorano i dragon?", "Perché adorano i draghi?"));
+        // 2026-11-17: the prompt's Bear copied into another spirit; Bear where the English has it.
+        assert!(name_added("Flight of the Eagle Spirit", "Volo dello Spirito dell'aquila", "Volo dello Spirito Bear"));
+        assert!(!name_added("I choose Bear.", "Scelgo l'Orso.", "Scelgo Bear."));
+    }
+
+    #[test]
+    fn no_attribute_the_english_does_not_have() {
+        // The review's fixes of 2026-11-17.
+        assert!(attribute_added("Healing Reduction", "Riduzione della cura", "Riduzione della Healing Power"));
+        assert!(attribute_added("Minimum Heal Percent", "Percentuale minima di cura", "Percentuale minima di Healing Power"));
+        // The attribute where the English has it.
+        assert!(!attribute_added("+25 Healing Power", "+25 Potere curativo", "+25 Healing Power"));
+        assert!(!attribute_added("Gain power when you heal.", "Ottieni potenza quando ti curi.", "Ottieni Power quando ti curi."));
     }
 }
