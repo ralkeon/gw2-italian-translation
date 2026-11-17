@@ -21,6 +21,7 @@
 //!              [--max-texts 2000] [--from-last] [--dry-run]               (see lt_sync.rs)
 //! gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]
 //!                                                                         (see gw2dat.rs)
+//! gw2it-server seeds --out seeds.db   (Text Translator's seed pool, read only: see gw2dat.rs)
 
 use std::{
     collections::HashMap,
@@ -116,7 +117,8 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server repair [--db gw2it.db] [--dry-run]
        gw2it-server bulk [--db gw2it.db] --file texts.jsonl --translators translators.json [--max-texts N] [--dry-run]
        gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json | --ask-to <file> | --answers <file>] [--max-texts 2000] [--from-last] [--dry-run]
-       gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]";
+       gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]
+       gw2it-server seeds --out seeds.db";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -130,7 +132,8 @@ fn main() {
     let bulk = args.first().is_some_and(|a| a == "bulk");
     let lt_sync = args.first().is_some_and(|a| a == "lt-sync");
     let gw2dat = args.first().is_some_and(|a| a == "gw2dat");
-    if replicate || consistency || english_names || review || plurals || import || repair || bulk || lt_sync || gw2dat {
+    let seeds = args.first().is_some_and(|a| a == "seeds");
+    if replicate || consistency || english_names || review || plurals || import || repair || bulk || lt_sync || gw2dat || seeds {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -153,6 +156,20 @@ fn main() {
     }
     let db = options.remove("--db").unwrap_or_else(|| "gw2it.db".into());
 
+    if seeds {
+        let Some(out) = options.remove("--out") else {
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        };
+        match gw2dat::sync_seeds(&out) {
+            Ok((new, total)) => println!("seeds: {new} new, {total} in {out}"),
+            Err(e) => {
+                eprintln!("seeds: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if gw2dat {
         let (Some(dat), Some(seeds), Some(out)) = (options.remove("--dat"), options.remove("--seeds"), options.remove("--out")) else {
             eprintln!("{USAGE}");

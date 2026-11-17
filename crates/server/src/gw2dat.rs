@@ -1,4 +1,5 @@
 //! gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]
+//! gw2it-server seeds --out seeds.db      (the seeds, from Text Translator's shared pool: sync_seeds below)
 //!
 //! Every English text of the game, read from Gw2.dat without anyone walking past it, for bulk.rs
 //! (`bulk --file gw2dat_en.db` reads its `texts (key, en)` like the Local Translator's map).
@@ -532,6 +533,63 @@ fn worth(en: &str) -> bool {
     en.chars().any(char::is_alphabetic) && far * 20 <= en.chars().count() && far <= 3
 }
 
+// ---------------------------------------------------------------- the seed pool
+
+/// Text Translator's shared seed pool (its author allows reading it; we only read: our list of new
+/// seeds is always empty). Request: bitcode of (last sequence we have, our new seeds); answer:
+/// bitcode of (seeds since then as (text ID, seed), more pages, the next sequence).
+pub const SEED_POOL: &str = "https://lang-server-production.up.railway.app/sync_seeds";
+
+const SEEDS_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS seeds (id INTEGER PRIMARY KEY NOT NULL, synced INTEGER NOT NULL CHECK (synced IN (0, 1)), seed INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS sync_state (table_name TEXT PRIMARY KEY, last_seq INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+";
+
+pub fn request(last_seq: u64) -> Vec<u8> {
+    bitcode::encode(&(last_seq, Vec::<(u32, u64)>::new()))
+}
+
+pub fn answer(body: &[u8]) -> Result<(Vec<(u32, u64)>, bool, u64), String> {
+    bitcode::decode(body).map_err(|e| format!("seed pool answer: {e}"))
+}
+
+/// Brings `file` (Text Translator's seeds.db layout) up to date with the pool: (new seeds, total).
+pub fn sync_seeds(file: &str) -> Result<(usize, usize), String> {
+    let con = Connection::open(file).map_err(|e| format!("{file}: {e}"))?;
+    con.execute_batch(SEEDS_SCHEMA).map_err(|e| e.to_string())?;
+    let mut last: u64 = con
+        .query_row("SELECT last_seq FROM sync_state WHERE table_name = 'seeds'", [], |r| r.get::<_, i64>(0))
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(0) as u64;
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(300))).build().into();
+    let mut new = 0;
+    for _page in 0..1000 {
+        let mut resp = agent
+            .post(SEED_POOL)
+            .header("Content-Type", "application/octet-stream")
+            .send(&request(last)[..])
+            .map_err(|e| format!("seed pool: {e}"))?;
+        let body = resp.body_mut().with_config().limit(256 << 20).read_to_vec().map_err(|e| format!("seed pool: {e}"))?;
+        let (seeds, more, next) = answer(&body)?;
+        let tx = con.unchecked_transaction().map_err(|e| e.to_string())?;
+        {
+            let mut put = tx.prepare("INSERT OR REPLACE INTO seeds (id, synced, seed) VALUES (?1, 1, ?2)").map_err(|e| e.to_string())?;
+            for (id, seed) in &seeds {
+                new += put.execute(params![id, *seed as i64]).map_err(|e| e.to_string())?;
+            }
+            tx.execute("INSERT OR REPLACE INTO sync_state (table_name, last_seq) VALUES ('seeds', ?1)", [next as i64]).map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        if !more || next <= last {
+            break;
+        }
+        last = next;
+    }
+    let total: i64 = con.query_row("SELECT count(*) FROM seeds", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    Ok((new, total as usize))
+}
+
 // ---------------------------------------------------------------- the run
 
 #[derive(Default, Debug)]
@@ -786,6 +844,15 @@ mod tests {
         assert!(worth("“I carry the wind.” — Archers of the Dominion…"));
         assert!(!worth("⌚\u{2efc}ಞ㑰˸\u{2e75}㳢✊རᡉᴻŔ㑂㌳՟㵇ॷ㦅᜵㬩㞦ḃ⪐űᓽ⼊⢕"));
         assert!(!worth("[null]") && !worth("(new string)"));
+    }
+
+    #[test]
+    fn the_seed_pool_s_messages() {
+        // The request Text Translator sends: (last sequence, its new seeds) - ours has none.
+        assert_eq!(request(419_000), vec![2, 184, 100, 6, 0, 0]);
+        let body = bitcode::encode(&(vec![(1_069_884u32, 30_645_249_454_306u64)], false, 430_757u64));
+        assert_eq!(answer(&body).unwrap(), (vec![(1_069_884, 30_645_249_454_306)], false, 430_757));
+        assert!(answer(&[1, 2, 3]).is_err());
     }
 
     #[test]

@@ -19,3 +19,5 @@ serde_json = "1"
 sha2 = "0.11"
 tiny_http = "0.12"
 ureq = { version = "3", features = ["json"] }
+# The seed pool of Text Translator speaks bitcode (gw2dat.rs, sync_seeds).
+bitcode = "0.6"
