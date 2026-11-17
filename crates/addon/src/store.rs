@@ -64,6 +64,8 @@ enum Msg {
     /// have it wrong are repaired.
     Term(Term, Origin),
     Search { query: String, exact: bool, reply: Sender<Vec<Row>> },
+    /// The variant changed (set_full_mode): the texts seen here that differ are sent again.
+    Resend,
 }
 
 static WORKER: Mutex<Option<(Sender<Msg>, JoinHandle<()>)>> = Mutex::new(None);
@@ -77,6 +79,13 @@ static TRANSLATIONS: Mutex<Option<HashMap<(u32, u64), String>>> = Mutex::new(Non
 /// correction goes to all the machine translations: one that differs later is for its own context),
 /// else the newest machine translation; as server/sql/same.sql chooses.
 static SAME: Mutex<Option<HashMap<u64, (String, bool)>>> = Mutex::new(None);
+
+/// (id, hash of the English) -> the all-Italian variant's Italian, where it differs from the hybrid
+/// one (the table `full`, from the global database).
+static FULL: Mutex<Option<HashMap<(u32, u64), String>>> = Mutex::new(None);
+
+/// The option "Tutto in italiano" (config.full_italian): the game is answered from FULL first.
+static FULL_MODE: AtomicBool = AtomicBool::new(false);
 
 /// Every translation, the general one of each English (SAME) after the others.
 const LOAD: &str = "SELECT id, hash, it, status = 'manual' AS manual FROM translations
@@ -148,6 +157,17 @@ pub(crate) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS english_names (
         name TEXT PRIMARY KEY
     ) WITHOUT ROWID;
+    -- The all-Italian variant: the rows whose text differs from the hybrid one, from the global
+    -- database (sync.rs); shown instead of `translations` when the option is on. An empty `it` is a
+    -- row taken out there.
+    CREATE TABLE IF NOT EXISTS full (
+        id   INTEGER NOT NULL,
+        hash INTEGER NOT NULL,
+        it   TEXT    NOT NULL,
+        at   INTEGER NOT NULL,
+        PRIMARY KEY (id, hash)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS full_at ON full (at);
     -- A text changed by another program (it without at) is a hand correction: keep it, and give it
     -- a new `at` so that the addon picks it up and sends it to the game.
     CREATE TRIGGER IF NOT EXISTS translations_edited AFTER UPDATE OF it ON translations
@@ -199,6 +219,13 @@ pub fn start(path: &Path) -> rusqlite::Result<Vec<Job>> {
     SHARED.translated.store(map.len() as u64, Ordering::Relaxed);
     *TRANSLATIONS.lock().unwrap() = Some(map);
     *SAME.lock().unwrap() = Some(same);
+    let full: HashMap<(u32, u64), String> = {
+        let mut stmt = con.prepare("SELECT id, hash, it FROM full WHERE it <> ''")?;
+        stmt.query_map([], |r| Ok(((r.get::<_, u32>(0)?, r.get::<_, i64>(1)? as u64), r.get::<_, String>(2)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    *FULL.lock().unwrap() = Some(full);
+    FULL_MODE.store(config::get().full_italian, Ordering::Relaxed);
 
     let backlog = {
         let mut stmt = con.prepare(
@@ -535,6 +562,30 @@ pub fn lookup(id: u32, hash: u64) -> Option<String> {
     TRANSLATIONS.lock().ok()?.as_ref()?.get(&(id, hash)).cloned()
 }
 
+/// What the game shows for a text: with the option "Tutto in italiano" the all-Italian variant's
+/// row where there is one, else the hybrid translation.
+pub fn shown(id: u32, hash: u64) -> Option<String> {
+    if FULL_MODE.load(Ordering::Relaxed)
+        && let Some(it) = FULL.lock().ok().and_then(|f| f.as_ref().and_then(|f| f.get(&(id, hash)).cloned()))
+    {
+        return Some(it);
+    }
+    lookup(id, hash)
+}
+
+/// Turns the all-Italian variant on or off: the texts the game has shown here that differ between
+/// the two are sent to it again.
+pub fn set_full_mode(on: bool) {
+    if FULL_MODE.swap(on, Ordering::Relaxed) != on {
+        send(Msg::Resend);
+    }
+}
+
+/// The rows of the all-Italian variant kept here.
+pub fn full_count() -> usize {
+    FULL.lock().ok().and_then(|f| f.as_ref().map(HashMap::len)).unwrap_or(0)
+}
+
 /// The translation of the same English under any ID (`hash` is the hash of the English).
 pub fn lookup_same(hash: u64) -> Option<String> {
     Some(SAME.lock().ok()?.as_ref()?.get(&hash)?.0.clone())
@@ -685,6 +736,7 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
     // Texts to bring up to date in map_it.db once committed.
     let mut touched = Vec::new();
     let mut repaired = Vec::new();
+    let mut resend: Vec<(u32, u64)> = Vec::new();
     {
         let mut seen_stmt = tx.prepare_cached(
             "INSERT INTO strings (id, hash, en, first_seen, last_seen) VALUES (?1, ?2, ?3, ?4, ?4)
@@ -752,17 +804,29 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
                     }
                 }
                 Msg::Search { query, exact, reply } => searches.push((query, exact, reply)),
+                Msg::Resend => {
+                    let seen: Vec<(u32, i64)> = tx
+                        .prepare_cached("SELECT f.id, f.hash FROM full f JOIN strings s ON s.id = f.id AND s.hash = f.hash WHERE f.it <> ''")?
+                        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                        .collect::<rusqlite::Result<_>>()?;
+                    resend.extend(seen.into_iter().map(|(id, hash)| (id, hash as u64)));
+                }
             }
         }
     }
     tx.commit()?;
+    for (id, hash) in resend {
+        if let Some(it) = shown(id, hash) {
+            pipe::send_text(id, hash, &it);
+        }
+    }
     SHARED.stored.fetch_add(added, Ordering::Relaxed);
     map_refresh_all(con, &touched);
     // Machine translations the glossary or a hand correction of the same English fixed: the game
     // shows the corrected ones from now on.
     for (id, hash, it, manual) in repaired {
         remember(id, hash, &it, manual);
-        pipe::send_text(id, hash, &it);
+        pipe::send_text(id, hash, &shown(id, hash).unwrap_or(it));
     }
     Ok(searches)
 }
@@ -835,13 +899,48 @@ struct Watch {
     version: i64,
     /// Newest `at` already handled.
     last_at: i64,
+    /// The same for the all-Italian variant's rows (sync.rs writes them).
+    last_full_at: i64,
 }
 
 impl Watch {
     fn new(con: &Connection) -> rusqlite::Result<Self> {
         let version = con.query_row("PRAGMA data_version", [], |r| r.get(0))?;
         let last_at = con.query_row("SELECT max(at) FROM translations", [], |r| r.get::<_, Option<i64>>(0))?.unwrap_or(0);
-        Ok(Self { version, last_at })
+        let last_full_at = con.query_row("SELECT max(at) FROM full", [], |r| r.get::<_, Option<i64>>(0))?.unwrap_or(0);
+        Ok(Self { version, last_at, last_full_at })
+    }
+
+    /// The all-Italian rows received since the last check: kept in memory (an empty one taken out)
+    /// and, with the option on, sent to the game for the texts it has shown here.
+    fn check_full(&mut self, con: &Connection) -> rusqlite::Result<()> {
+        let mut stmt = con.prepare_cached(
+            "SELECT f.id, f.hash, f.it, f.at, EXISTS (SELECT 1 FROM strings s WHERE s.id = f.id AND s.hash = f.hash)
+             FROM full f WHERE f.at > ?1 ORDER BY f.at",
+        )?;
+        let rows: Vec<(u32, u64, String, i64, bool)> = stmt
+            .query_map([self.last_full_at], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64, r.get(2)?, r.get(3)?, r.get(4)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        let mode = FULL_MODE.load(Ordering::Relaxed);
+        for (id, hash, it, at, seen) in rows {
+            self.last_full_at = self.last_full_at.max(at);
+            if let Ok(mut full) = FULL.lock()
+                && let Some(full) = full.as_mut()
+            {
+                if it.is_empty() {
+                    full.remove(&(id, hash));
+                } else {
+                    full.insert((id, hash), it);
+                }
+            }
+            if mode
+                && seen
+                && let Some(text) = shown(id, hash)
+            {
+                pipe::send_text(id, hash, &text);
+            }
+        }
+        Ok(())
     }
 
     fn check(&mut self, con: &Connection) -> rusqlite::Result<()> {
@@ -881,11 +980,12 @@ impl Watch {
                 }
                 remember(id, hash, &it, manual);
                 if seen {
-                    pipe::send_text(id, hash, &it);
+                    pipe::send_text(id, hash, &shown(id, hash).unwrap_or(it));
                 }
             }
         }
-        Ok(())
+        drop(stmt);
+        self.check_full(con)
     }
 }
 

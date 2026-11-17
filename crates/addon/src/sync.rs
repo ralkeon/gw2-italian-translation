@@ -219,6 +219,8 @@ struct Mark {
     nseq: i64,
     /// The same for the names taken out of them.
     useq: i64,
+    /// The newest row of the all-Italian variant received (from the main server; the spare has none).
+    fseq: i64,
 }
 
 /// The sync_state key of the glossary's seq that goes with `seq_key`.
@@ -235,7 +237,7 @@ impl Mark {
         // from 10^12): what we had from the main server we need not get again.
         let seq = get(seq_key)?.max(get("seq")?);
         let gseq = get(&glossary_key(seq_key))?.max(get("gseq")?);
-        Ok(Self { seq, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")?, gseq, gsent: get("gsent_at")?, nseq: get("nseq")?, useq: get("useq")? })
+        Ok(Self { seq, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")?, gseq, gsent: get("gsent_at")?, nseq: get("nseq")?, useq: get("useq")?, fseq: get("fseq")? })
     }
 
     fn save(&self, tx: &Transaction, seq_key: &str) -> rusqlite::Result<()> {
@@ -250,6 +252,7 @@ impl Mark {
             ("gsent_at", self.gsent),
             ("nseq", self.nseq),
             ("useq", self.useq),
+            ("fseq", self.fseq),
         ] {
             stmt.execute(params![k, v])?;
         }
@@ -297,7 +300,18 @@ struct Reply {
     unnames: Vec<String>,
     #[serde(default)]
     useq: i64,
+    // Missing from a server without the all-Italian variant (the spare).
+    #[serde(default)]
+    full: Vec<RemoteFull>,
+    #[serde(default)]
+    fseq: i64,
+    #[serde(default)]
+    fmore: bool,
 }
+
+/// A row of the all-Italian variant received: [id, hash, it, seq]; an empty `it` is a row taken out.
+#[derive(Deserialize)]
+struct RemoteFull(u32, String, String, #[allow(dead_code)] i64);
 
 /// Terms sent in one request (the server accepts up to 50).
 const TERMS_MAX: usize = 50;
@@ -321,7 +335,7 @@ fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Du
         let reply: Reply = post(
             &format!("{server}/sync"),
             Some(&token),
-            &json!({ "since": mark.seq, "rows": rows, "gsince": mark.gseq, "glossary": terms, "nsince": mark.nseq, "usince": mark.useq }),
+            &json!({ "since": mark.seq, "rows": rows, "gsince": mark.gseq, "glossary": terms, "nsince": mark.nseq, "usince": mark.useq, "fsince": mark.fseq }),
         )
         .map_err(refused)?;
         if let Some(last) = outgoing.last() {
@@ -335,11 +349,15 @@ fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Du
         // The glossary first: the translations that come with it are repaired with it.
         received_terms(&reply.glossary);
         received_names(con, &reply.names, &reply.unnames)?;
+        if !target.spare {
+            received_full(con, &reply.full)?;
+            mark.fseq = mark.fseq.max(reply.fseq);
+        }
         received += apply(con, &reply.rows, mark, target.seq_key())?;
         sent += outgoing.len();
         next = Duration::from_secs(reply.next_s.clamp(30, 3600));
         let stopping = matches!(stop.try_recv(), Err(TryRecvError::Disconnected));
-        if stopping || (outgoing.len() < PUSH_MAX && !reply.more && terms.len() < TERMS_MAX && !reply.gmore) {
+        if stopping || (outgoing.len() < PUSH_MAX && !reply.more && terms.len() < TERMS_MAX && !reply.gmore && !reply.fmore) {
             break;
         }
     }
@@ -460,6 +478,39 @@ fn received_terms(terms: &[RemoteTerm]) {
 
 /// The names that stay in English the server sent: kept, and used from now on (translate.rs); and
 /// the ones it took out of them, no longer kept in English.
+/// The all-Italian variant's rows received: kept in the table `full` (store.rs reads them from there
+/// and, with the option on, sends them to the game). An empty one is a row taken out: kept empty, so
+/// that the store sees it go. A row whose markup does not match our English is not taken.
+fn received_full(con: &mut Connection, rows: &[RemoteFull]) -> rusqlite::Result<()> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let tx = con.transaction()?;
+    {
+        let mut en_of = tx.prepare_cached(
+            "SELECT en FROM strings WHERE id = ?1 AND hash = ?2 UNION ALL SELECT en FROM cloud_strings WHERE id = ?1 AND hash = ?2 LIMIT 1",
+        )?;
+        let mut put = tx.prepare_cached("INSERT OR REPLACE INTO full (id, hash, it, at) VALUES (?1, ?2, ?3, ?4)")?;
+        // `at` grows with every row: the store picks up what is newer than what it has seen.
+        let mut at = now_ms();
+        for RemoteFull(id, hash, it, _) in rows {
+            let Ok(hash) = u64::from_str_radix(hash, 16) else {
+                continue;
+            };
+            if !it.is_empty()
+                && let Some(en) = en_of.query_row(params![id, hash as i64], |r| r.get::<_, String>(0)).optional()?
+                && !markup::token_mismatch(&en, it).is_empty()
+            {
+                log::warn!("sync: all-Italian text of {id} breaks the markup: skipped");
+                continue;
+            }
+            put.execute(params![id, hash as i64, it, at])?;
+            at += 1;
+        }
+    }
+    tx.commit()
+}
+
 fn received_names(con: &mut Connection, names: &[String], unnames: &[String]) -> rusqlite::Result<()> {
     if names.is_empty() && unnames.is_empty() {
         return Ok(());
@@ -563,6 +614,29 @@ fn set_status(s: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn all_italian_rows_are_kept_the_broken_ones_not() {
+        let mut con = Connection::open_in_memory().unwrap();
+        con.execute_batch(crate::store::SCHEMA).unwrap();
+        con.execute("INSERT INTO strings (id, hash, en, first_seen, last_seen) VALUES (1, 16, 'Grant %str1% might.', 0, 0)", []).unwrap();
+        let rows = vec![
+            RemoteFull(1, "10".into(), "Conferisci %str1% Forza.".into(), 1),
+            RemoteFull(2, "20".into(), "Il Re Folle".into(), 2),
+            RemoteFull(1, "11".into(), String::new(), 3),
+        ];
+        received_full(&mut con, &rows).unwrap();
+        // The markup lost: not taken, the row before stays.
+        received_full(&mut con, &[RemoteFull(1, "10".into(), "Conferisci Forza.".into(), 4)]).unwrap();
+        let got: Vec<(i64, i64, String)> = con
+            .prepare("SELECT id, hash, it FROM full ORDER BY id, hash")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(got, vec![(1, 16, "Conferisci %str1% Forza.".into()), (1, 17, String::new()), (2, 32, "Il Re Folle".into())]);
+    }
 
     fn db() -> Connection {
         let con = Connection::open_in_memory().unwrap();

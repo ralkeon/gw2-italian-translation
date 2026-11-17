@@ -5,7 +5,10 @@ use std::sync::Mutex;
 use gw2it_translate::openai::PRESETS;
 use nexus::imgui::Ui;
 
-use crate::config::{self, Config, Llm};
+use crate::{
+    config::{self, Config, Llm},
+    store,
+};
 
 /// The fields as typed, until saved.
 static EDIT: Mutex<Option<Config>> = Mutex::new(None);
@@ -17,6 +20,25 @@ pub fn render(ui: &Ui) {
     let c = edit.get_or_insert_with(config::get);
 
     ui.text_disabled(concat!("Italian Translation v", env!("CARGO_PKG_VERSION")));
+
+    // The variant: applied at once, not with "Salva" (it is no key to type).
+    let mut full = config::get().full_italian;
+    if ui.checkbox("Tutto in italiano", &mut full) {
+        let mut saved = config::get();
+        saved.full_italian = full;
+        config::set(saved);
+        c.full_italian = full;
+        store::set_full_mode(full);
+    }
+    ui.text_wrapped(
+        "Spenta (traduzione ibrida): i nomi di abilità, tratti, specializzazioni, luoghi, boon e \
+         condition restano in inglese, come li dicono i giocatori italiani. Accesa: anche quelli \
+         in italiano (Berserker Fantasma, Arco del Leone, Forza), dove la traduzione completa è \
+         già pronta; il resto resta com'è.",
+    );
+    ui.text_disabled(format!("Testi tutti in italiano già pronti: {}", store::full_count()));
+    ui.separator();
+
     ui.text_wrapped(
         "Traduttori, nell'ordine in cui vengono usati: quando uno finisce la quota o non risponde \
          si passa al successivo, e si torna al primo appena è di nuovo disponibile. Tutte le chiavi \

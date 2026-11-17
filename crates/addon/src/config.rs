@@ -22,6 +22,9 @@ pub struct Config {
     pub llm: Vec<Llm>,
     pub sync: Sync,
     pub install: Install,
+    /// "Tutto in italiano": the names the hybrid translation keeps in English (skills, traits,
+    /// places, boons...) shown in Italian too, where the global database has the all-Italian row.
+    pub full_italian: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

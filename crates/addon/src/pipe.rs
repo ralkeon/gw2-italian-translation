@@ -136,7 +136,7 @@ fn session(req_name: &str, rep_name: &str) -> io::Result<()> {
     install::module_works();
     let repaired = store::take_repaired();
     for (id, hash, it) in &repaired {
-        send_text(*id, *hash, it);
+        send_text(*id, *hash, &store::shown(*id, *hash).unwrap_or_else(|| it.clone()));
     }
     if !repaired.is_empty() {
         log::info!("{} repaired translations sent to the game", repaired.len());
@@ -159,7 +159,7 @@ fn session(req_name: &str, rep_name: &str) -> io::Result<()> {
 
 fn on_text(id: u32, hash: u64, text: String) {
     SHARED.received.fetch_add(1, Ordering::Relaxed);
-    match store::lookup(id, hash) {
+    match store::shown(id, hash) {
         Some(it) => {
             send_text(id, hash, &it);
         }
