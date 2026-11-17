@@ -66,6 +66,20 @@ Se i testi restano in inglese:
   giocatori: chi trova per primo un testo lo traduce per tutti. Le traduzioni fatte dal server
   hanno la precedenza su quelle automatiche degli altri addon.
 
+### Ibrida o tutto in italiano
+
+Nelle opzioni dell'addon in Nexus c'è la casella **Tutto in italiano**:
+- **spenta** (traduzione ibrida, la scelta di partenza): i nomi di abilità, tratti,
+  specializzazioni, luoghi, fazioni, boon e condition restano in inglese, come li dicono di solito
+  i giocatori italiani e come li trovi nelle guide e sulla wiki;
+- **accesa**: anche quelli in italiano (Berserker Fantasma, Arco del Leone, Forza, Legione delle
+  Ceneri), con un glossario scelto apposta e le traduzioni ufficiali di Guild Wars 1 dove esistono.
+  La variante si completa giorno dopo giorno: i testi non ancora pronti si vedono come
+  nell'ibrida.
+
+Il cambio vale subito, senza riavviare. Per cercare un nome in inglese (sulla wiki, in chat) puoi
+spegnere un attimo la traduzione con il tasto di Text Translator.
+
 Impostazioni e traduzioni stanno in `Guild Wars 2/addons/italian_translation/`
 (`config.toml` e `strings.db`). Per non condividere le traduzioni con il database globale metti
 `enabled = false` nella sezione `[sync]` di `config.toml`.
