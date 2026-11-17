@@ -422,7 +422,10 @@ struct Row {
     id: i64,
     hash: String,
     en: String,
+    /// Our Italian as the copy starts from it: as it was before our Title Case pass (see run()).
     it: String,
+    /// The digest of our Italian as it is now: the copy is made again when it changes.
+    ours: String,
 }
 
 /// A text for the model: its row, the terms to put in, the unusable answers so far.
@@ -435,9 +438,23 @@ fn digest(s: &str) -> String {
 
 pub fn run(con: &Connection, glossary: &Glossary, ask: Option<&names::Ask>, options: &Options) -> rusqlite::Result<Report> {
     let mut report = Report::default();
+    // The Local Translator writes names the Italian way (a capital only on the first word and on real
+    // names: its guide, 2026-11-05); ours follow the English's Title Case since 2026-11-17, put by
+    // byhand/case.py, which keeps the text before in history (replaced_by 'case'). When that is the
+    // last change of a row, the copy starts from the text before it.
     let rows: Vec<Row> = {
-        let mut stmt = con.prepare("SELECT id, hash, en, it FROM translations ORDER BY id, hash")?;
-        stmt.query_map([], |r| Ok(Row { id: r.get(0)?, hash: r.get(1)?, en: r.get(2)?, it: r.get(3)? }))?.collect::<rusqlite::Result<_>>()?
+        let mut stmt = con.prepare(
+            "SELECT t.id, t.hash, t.en, t.it,
+                    (SELECT h.it FROM history h WHERE h.id = t.id AND h.hash = t.hash AND h.replaced_by = 'case'
+                       AND h.replaced_at = (SELECT max(x.replaced_at) FROM history x WHERE x.id = t.id AND x.hash = t.hash))
+             FROM translations t ORDER BY t.id, t.hash",
+        )?;
+        stmt.query_map([], |r| {
+            let it: String = r.get(3)?;
+            let before: Option<String> = r.get(4)?;
+            Ok(Row { id: r.get(0)?, hash: r.get(1)?, en: r.get(2)?, ours: digest(&it), it: before.unwrap_or(it) })
+        })?
+        .collect::<rusqlite::Result<_>>()?
     };
     report.rows = rows.len();
     // (id, hash) -> (ours, rule, source, tries)
@@ -458,7 +475,7 @@ pub fn run(con: &Connection, glossary: &Glossary, ask: Option<&names::Ask>, opti
             Plan::Ask(needs) => ("pending", row.it.as_str(), digest(&serde_json::to_string(needs).unwrap_or_default())),
             Plan::Ours => ("hybrid", row.it.as_str(), digest("")),
         };
-        let ours = digest(&row.it);
+        let ours = row.ours.clone();
         if let Some((old_ours, old_rule, old_source, tries)) = there.remove(&(row.id, row.hash.clone()))
             && old_ours == ours
             && old_rule == rule
@@ -563,7 +580,7 @@ pub fn run(con: &Connection, glossary: &Glossary, ask: Option<&names::Ask>, opti
                 if !options.dry_run {
                     con.execute(
                         "UPDATE lt_sync SET it = ?3, source = ?4, tries = ?5, at = ?6 WHERE id = ?1 AND hash = ?2 AND ours = ?7",
-                        params![row.id, row.hash, it, source, tries, now_ms(), digest(&row.it)],
+                        params![row.id, row.hash, it, source, tries, now_ms(), row.ours],
                     )?;
                 }
             }
@@ -788,6 +805,35 @@ mod tests {
         assert_eq!(row(&con, 3).0, "Ciao!");
         let left: i64 = con.query_row("SELECT count(*) FROM lt_sync", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 3);
+    }
+
+    #[test]
+    fn the_copy_keeps_the_italian_case_of_before_our_title_case() {
+        let con = db();
+        let g = glossary();
+        // Our Title Case pass changed row 3; the text before is in history ('case').
+        con.execute_batch(
+            "INSERT INTO translations (id, hash, en, it, status, author, at, seq, trust) VALUES
+               (5, 'e', 'Storm Bolt', 'Dardo di Tempesta', 'auto', 'x', 0, 5, 1);
+             INSERT INTO history (id, hash, it, status, author, at, replaced_by, replaced_at) VALUES
+               (5, 'e', 'Dardo di tempesta', 'auto', 'x', 0, 'case', 10);",
+        )
+        .unwrap();
+        let never = |_: &str, user: &str| -> Result<Value, String> { panic!("asked: {user}") };
+        let options = Options { dry_run: false, max_texts: 0, from_last: false };
+        run(&con, &g, Some(&never), &options).unwrap();
+        assert_eq!(row(&con, 5).0, "Dardo di tempesta");
+        // Made again only when our text changes, not on every run.
+        assert_eq!(run(&con, &g, Some(&never), &options).unwrap().made, 0);
+        // A later change of ours (not the case pass) is the base again.
+        con.execute_batch(
+            "INSERT INTO history (id, hash, it, status, author, at, replaced_by, replaced_at) VALUES
+               (5, 'e', 'Dardo di Tempesta', 'auto', 'x', 0, 'byhand', 20);
+             UPDATE translations SET it = 'Dardo della tempesta' WHERE id = 5;",
+        )
+        .unwrap();
+        assert_eq!(run(&con, &g, Some(&never), &options).unwrap().made, 1);
+        assert_eq!(row(&con, 5).0, "Dardo della tempesta");
     }
 
     #[test]
