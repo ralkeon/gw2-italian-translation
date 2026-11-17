@@ -89,7 +89,8 @@ pub fn words(names: &str, terms: &str) -> Result<Vec<(String, String, String)>, 
                 continue;
             }
             let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or(key);
-            if en.chars().count() < 3 || en == it || !seen.insert(en.to_owned()) {
+            // The full variant keeps the English word too ("Mithril" = "di Mithril"): nothing to swap.
+            if en.chars().count() < 3 || en == it || has_word(it, en) || !seen.insert(en.to_owned()) {
                 continue;
             }
             out.push((en.to_owned(), it.to_owned(), kind.to_owned()));
