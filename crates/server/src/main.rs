@@ -147,7 +147,7 @@ fn main() {
     let fetch = args.iter().any(|a| a == "--fetch");
     let from_last = args.iter().any(|a| a == "--from-last");
     let all = args.iter().any(|a| a == "--all");
-    args.retain(|a| a != "--dry-run" && a != "--include-manual" && a != "--fetch" && a != "--from-last");
+    args.retain(|a| a != "--dry-run" && a != "--include-manual" && a != "--fetch" && a != "--from-last" && a != "--all");
     let mut options = HashMap::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
