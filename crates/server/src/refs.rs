@@ -5,9 +5,10 @@
 //! - "fr", "es", "de": the game's own French, Spanish and German of the same text ID (gw2dat.rs,
 //!   table `other` of data/gw2dat_en.db), when that file has the same English. German only for
 //!   short texts: the lines go to a model, and two Romance languages say enough for a long one.
-//! - "lt": the Local Translator's Italian (its map, mappa/map_it.db); "lt_hand": the last
-//!   correction its reviewers saved for that text, when there is one. Another module's work, with
-//!   its own rules: a hint, not ours.
+//! - "lt": the Local Translator's Italian (its map, mappa/map_it.db); "lt_hand": its reviewers'
+//!   hand-reviewed Italian of that text (the "strings" of its public patch, copied each night to
+//!   data/lt_reviewed.db by agent/ltreviewed.py), when there is one. Another module's work, with its
+//!   own rules: a hint, not ours.
 //! - "gw1": [English, Italian] of the GW1 names found in the text (data/gw1.db, from the GW1
 //!   client's own Italian; marks like [M]/[F]/[PF] in front are GW1's gender and number).
 //!
@@ -15,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::{Map, Value, json};
 
 /// Texts up to this many characters also get the German.
@@ -26,6 +27,7 @@ const GW1_MAX: usize = 6;
 pub struct Refs {
     other: Option<Connection>,
     map: Option<Connection>,
+    reviewed: Option<Connection>,
     /// GW1 names: (English, Italian), longest English first.
     gw1: Vec<(String, String)>,
     /// Which references to give.
@@ -75,7 +77,7 @@ fn found(text: &str, name: &str) -> bool {
 
 impl Refs {
     /// The reference files around the database `db` (data/gw2it.db): data/gw2dat_en.db, data/gw1.db,
-    /// mappa/map_it.db. `languages`: false gives only "lt" and "gw1" (the full-Italian rewrites).
+    /// data/lt_reviewed.db, mappa/map_it.db. `languages`: false gives only "lt" and "gw1" (the full-Italian rewrites).
     pub fn open(db: Option<&str>, languages: bool) -> Refs {
         let dir = db.and_then(|d| Path::new(d).parent().map(Path::to_path_buf)).unwrap_or_else(|| PathBuf::from("."));
         let up = dir.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".."));
@@ -88,7 +90,13 @@ impl Refs {
             }
         }
         gw1.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then(a.cmp(b)));
-        Refs { other: if languages { open(&dir.join("gw2dat_en.db")) } else { None }, map: open(&up.join("mappa").join("map_it.db")), gw1, languages }
+        Refs {
+            other: if languages { open(&dir.join("gw2dat_en.db")) } else { None },
+            map: open(&up.join("mappa").join("map_it.db")),
+            reviewed: open(&dir.join("lt_reviewed.db")),
+            gw1,
+            languages,
+        }
     }
 
     /// The references of the text `id` whose English is `en` (`same`: whether another file's English
@@ -117,18 +125,12 @@ impl Refs {
                     refs.insert("lt".into(), json!(it.trim()));
                 }
             }
-            let hand: Option<(String, String)> = con
-                .query_row(
-                    "SELECT suggestion, en_source FROM suggestions WHERE key = ?1 ORDER BY id DESC LIMIT 1",
-                    params![id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()
-                .ok()
-                .flatten();
-            if let Some((it, source)) = hand {
-                if (source.is_empty() || same(&source)) && !it.trim().is_empty() && refs.get("lt").and_then(Value::as_str) != Some(it.as_str()) {
-                    refs.insert("lt_hand".into(), json!(it.trim()));
+        }
+        if let Some(con) = &self.reviewed {
+            let hand: Option<String> = con.query_row("SELECT it FROM reviewed WHERE key = ?1", [id], |r| r.get(0)).optional().ok().flatten();
+            if let Some(it) = hand.as_deref().map(str::trim).filter(|it| !it.is_empty()) {
+                if refs.get("lt").and_then(Value::as_str) != Some(it) {
+                    refs.insert("lt_hand".into(), json!(it));
                 }
             }
         }
