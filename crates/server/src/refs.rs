@@ -44,11 +44,12 @@ fn unmarked(it: &str) -> &str {
     }
 }
 
-/// A GW1 pair worth giving: a name (capitalized, short, no markup) whose Italian is another word.
+/// A GW1 pair worth giving: a name of two words or more (capitalized, short, no markup) whose Italian
+/// is another; single words ("Armor", "Guild") are common words the glossary already covers.
 fn a_name(en: &str, it: &str) -> bool {
     let words = en.split_whitespace().count();
     en.chars().count() >= 4
-        && (1..=5).contains(&words)
+        && (2..=5).contains(&words)
         && en.chars().next().is_some_and(char::is_uppercase)
         && !en.contains(['%', '<', '[', '_'])
         && unmarked(it) != en
@@ -101,7 +102,7 @@ impl Refs {
                     if let Ok(rows) = stmt.query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
                         for (lang, text) in rows.flatten() {
                             if lang != "de" || en.chars().count() <= GERMAN_UP_TO {
-                                refs.insert(lang, json!(text));
+                                refs.insert(lang, json!(text.trim()));
                             }
                         }
                     }
@@ -113,7 +114,7 @@ impl Refs {
                 con.query_row("SELECT en, it FROM texts WHERE key = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?))).optional().ok().flatten();
             if let Some((_, Some(it))) = row.filter(|(e, _)| same(e)) {
                 if !it.trim().is_empty() {
-                    refs.insert("lt".into(), json!(it));
+                    refs.insert("lt".into(), json!(it.trim()));
                 }
             }
             let hand: Option<(String, String)> = con
@@ -127,7 +128,7 @@ impl Refs {
                 .flatten();
             if let Some((it, source)) = hand {
                 if (source.is_empty() || same(&source)) && !it.trim().is_empty() && refs.get("lt").and_then(Value::as_str) != Some(it.as_str()) {
-                    refs.insert("lt_hand".into(), json!(it));
+                    refs.insert("lt_hand".into(), json!(it.trim()));
                 }
             }
         }
@@ -156,6 +157,7 @@ mod tests {
     fn gw1_names_are_whole_words_not_first_words() {
         assert!(found("The walls of Ascalon City fell.", "Ascalon City"));
         assert!(found("They fled Ascalon.", "Ascalon"));
+        assert!(found("Ascalon City", "Ascalon City"));
         assert!(!found("Ascalonian guards", "Ascalon"));
         assert!(!found("Load the cannon. Load it now.", "Load"));
         assert!(found("Ascalon", "Ascalon"));
@@ -168,6 +170,8 @@ mod tests {
         assert_eq!(unmarked("Limite di credito"), "Limite di credito");
         assert!(a_name("Inner Fire", "[M]Fuoco Interiore"));
         assert!(!a_name("Olias", "[U]Olias"));
+        assert!(!a_name("Armor", "[F]Armatura"));
+        assert!(a_name("Ascalon City", "[F]Città di Ascalon"));
         assert!(!a_name("insufficient funds", "Fondi non sufficienti"));
         assert!(!a_name("Hundred Blades (PvP) %str1%", "x"));
     }
