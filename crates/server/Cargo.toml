@@ -21,3 +21,5 @@ tiny_http = "0.12"
 ureq = { version = "3", features = ["json"] }
 # The seed pool of Text Translator speaks bitcode (gw2dat.rs, sync_seeds).
 bitcode = "0.6"
+# The all-Italian variant's words (full.rs): full/names_it.toml, full/terms.toml.
+toml = "0.8"

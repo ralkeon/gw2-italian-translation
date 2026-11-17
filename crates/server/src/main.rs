@@ -22,6 +22,8 @@
 //! gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]
 //!                                                                         (see gw2dat.rs)
 //! gw2it-server seeds --out seeds.db   (Text Translator's seed pool, read only: see gw2dat.rs)
+//! gw2it-server full --names names_it.toml --terms terms.toml [--ask-to <file> | --answers <file>] [--max-texts 200] [--dry-run]
+//!                                                                         (see full.rs)
 
 use std::{
     collections::HashMap,
@@ -40,6 +42,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 
 mod bulk;
 mod consistency;
+mod full;
 mod glossary;
 mod gw2dat;
 mod names;
@@ -118,7 +121,8 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server bulk [--db gw2it.db] --file texts.jsonl (--translators translators.json | --ask-to <file> | --answers <file>) [--max-texts N] [--dry-run]
        gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json | --ask-to <file> | --answers <file>] [--max-texts 2000] [--from-last] [--dry-run]
        gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]
-       gw2it-server seeds --out seeds.db";
+       gw2it-server seeds --out seeds.db
+       gw2it-server full --names names_it.toml --terms terms.toml [--ask-to <file> | --answers <file>] [--max-texts 200] [--dry-run]";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -133,7 +137,8 @@ fn main() {
     let lt_sync = args.first().is_some_and(|a| a == "lt-sync");
     let gw2dat = args.first().is_some_and(|a| a == "gw2dat");
     let seeds = args.first().is_some_and(|a| a == "seeds");
-    if replicate || consistency || english_names || review || plurals || import || repair || bulk || lt_sync || gw2dat || seeds {
+    let full = args.first().is_some_and(|a| a == "full");
+    if replicate || consistency || english_names || review || plurals || import || repair || bulk || lt_sync || gw2dat || seeds || full {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -145,7 +150,7 @@ fn main() {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts" | "--review-daily" | "--file" | "--excluded" | "--ask-to" | "--answers" | "--glossary" | "--dat" | "--seeds" | "--out"), Some(v)) => {
+            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts" | "--review-daily" | "--file" | "--excluded" | "--ask-to" | "--answers" | "--glossary" | "--dat" | "--seeds" | "--out" | "--names" | "--terms"), Some(v)) => {
                 options.insert(name.to_owned(), v);
             }
             _ => {
@@ -156,6 +161,34 @@ fn main() {
     }
     let db = options.remove("--db").unwrap_or_else(|| "gw2it.db".into());
 
+    if full {
+        let (Some(names), Some(terms)) = (options.remove("--names"), options.remove("--terms")) else {
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        };
+        let by_hand = match (options.remove("--ask-to"), options.remove("--answers")) {
+            (Some(f), None) => Some(full::ByHand::AskTo(f)),
+            (None, Some(f)) => Some(full::ByHand::Answers(f)),
+            _ => None,
+        };
+        let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(200);
+        let con = open(&db).unwrap_or_else(|e| {
+            eprintln!("cannot open {db}: {e}");
+            std::process::exit(1);
+        });
+        match full::run(&con, &names, &terms, &full::Options { max_texts, dry_run, by_hand }) {
+            Ok(r) => println!(
+                "full: {} words, {} rows: {} as in the hybrid, {} made already, {} stale, {} names written, {} to rewrite, {} asked, {} written, {} refused{}",
+                r.words, r.rows, r.same, r.kept, r.stale, r.names, r.to_rewrite, r.asked, r.written, r.refused,
+                if dry_run { " (dry run: nothing changed)" } else { "" }
+            ),
+            Err(e) => {
+                eprintln!("full: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if seeds {
         let Some(out) = options.remove("--out") else {
             eprintln!("{USAGE}");
