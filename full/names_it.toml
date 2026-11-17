@@ -1369,10 +1369,9 @@ status = "proposed"
 [[name]]
 en = "Destiny's Edge"
 kind = "imported"
-it = "Destiny's Edge"
-status = "proposed"
-doubt = true
-note = "the famous guild: kept like a band name; alt Filo del Destino"
+it = "Lama del Destino"
+status = "approved"
+note = "user 2026-11-17; the guild, translated like de Klinge/fr Lame"
 
 [[name]]
 en = "Detective Rama"
@@ -1998,10 +1997,9 @@ note = "term place"
 [[name]]
 en = "Fissure of Woe"
 kind = "imported"
-it = "Fessura del Dolore"
-status = "proposed"
-doubt = true
-note = "GW1 place; Italian GW1 form not readable"
+it = "Fenditura del Male"
+status = "approved"
+note = "user 2026-11-17; GW1 official Italian (gw1_en_it.tsv)"
 
 [[name]]
 en = "Flame Legion"
@@ -5405,16 +5403,14 @@ status = "proposed"
 en = "Tyrian"
 kind = "imported"
 it = "di Tyria"
-status = "proposed"
-doubt = true
+status = "approved"
 note = "adjective; written as 'di Tyria' after the noun, never 'tiriano'"
 
 [[name]]
 en = "Tyrians"
 kind = "imported"
 it = "Abitanti di Tyria"
-status = "proposed"
-doubt = true
+status = "approved"
 note = "plural noun"
 
 [[name]]
@@ -6061,8 +6057,7 @@ status = "proposed"
 en = "Frostfang"
 kind = "item"
 it = "Zannagelida"
-status = "proposed"
-doubt = true
+status = "approved"
 note = "legendary axe; de keeps Frostfang, es Colmilloescarcha"
 
 [[name]]
@@ -6177,8 +6172,7 @@ status = "proposed"
 en = "HOPE"
 kind = "item"
 it = "SPERANZA"
-status = "proposed"
-doubt = true
+status = "approved"
 note = "the pistol name is in capitals like the English"
 
 [[name]]
@@ -6196,10 +6190,9 @@ status = "proposed"
 [[name]]
 en = "Jorbreaker"
 kind = "item"
-it = "Spaccajor"
-status = "proposed"
-doubt = true
-note = "pun on jawbreaker + Jormag (de Jorzipan, es Jorcamelo)"
+it = "Jorrone"
+status = "approved"
+note = "user 2026-11-17; pun on a sweet + Jormag like de Jorzipan, fr Jorcolat, es Jorcamelo: torrone"
 
 [[name]]
 en = "Kamohoali'i Kotaki"
@@ -7619,16 +7612,16 @@ status = "proposed"
 [[name]]
 en = "The HMS Divinity"
 kind = "item"
-it = "La HMS Divinity"
-status = "proposed"
-doubt = true
-note = "ship name: de IMS Göttlichkeit, es Buque de Su Majestad Divinidad; kept as a ship name"
+it = "La R.N. Divinità"
+status = "approved"
+note = "user 2026-11-17; the local naval prefix like de IMS Göttlichkeit, fr V.S.M. Divinité: R.N. = Regia Nave"
 
 [[name]]
 en = "The Juggernaut"
 kind = "item"
-it = "Il Juggernaut"
-status = "proposed"
+it = "Il Colosso"
+status = "approved"
+note = "user 2026-11-17: Juggernaut = Colosso (de Der Moloch, fr Le Mastodonte)"
 
 [[name]]
 en = "The Minstrel"
@@ -16169,7 +16162,7 @@ status = "proposed"
 [[name]]
 en = "Shadowstep"
 kind = "skill"
-it = "Passo dell'Ombra"
+it = "Passo nell'Ombra"
 status = "approved"
 note = "term mechanic"
 
@@ -19836,8 +19829,7 @@ status = "proposed"
 en = "Applied Force"
 kind = "trait"
 it = "Forza Applicata"
-status = "proposed"
-doubt = true
+status = "approved"
 note = "Forza is the Might boon; here plain force"
 
 [[name]]
@@ -22455,10 +22447,9 @@ status = "proposed"
 [[name]]
 en = "Juggernaut"
 kind = "trait"
-it = "Juggernaut"
-status = "proposed"
-doubt = true
-note = "kept: gaming word; alt Colosso"
+it = "Colosso"
+status = "approved"
+note = "user 2026-11-17 (de Moloch, fr Mastodonte)"
 
 [[name]]
 en = "Justice is Blind"
@@ -24216,9 +24207,8 @@ status = "proposed"
 en = "Shadestep"
 kind = "trait"
 it = "Passo Tetro"
-status = "proposed"
-doubt = true
-note = "Shadowstep is Passo dell'Ombra and Shade is Ombra: a different word to keep them apart"
+status = "approved"
+note = "user 2026-11-17 (es Paso tétrico); Shadowstep is Passo nell'Ombra and Shade is Ombra: a different word to keep them apart"
 
 [[name]]
 en = "Shadow Savior"
@@ -29133,8 +29123,7 @@ status = "proposed"
 en = "Glitched Adventure"
 kind = "set"
 it = "dell'Avventura Buggata"
-status = "proposed"
-doubt = true
+status = "approved"
 note = "pun on game glitches (Super Adventure Box)"
 
 [[name]]
@@ -29339,8 +29328,7 @@ status = "proposed"
 en = "Lucky"
 kind = "set"
 it = "Fortunato"
-status = "proposed"
-doubt = true
+status = "approved"
 note = "'Lucky Envelope' = Busta Fortunata (Lunar New Year); Fortunate is Fortunato too"
 
 [[name]]

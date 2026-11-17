@@ -36,3 +36,9 @@
 12. Lucky: "Fortunato" (Fortunate è uguale)
 
 **Prossimo passo, se approvi:** la revisione la facciamo per tipo, perché le 3.938 proposte sono troppe da leggere tutte. Prima i 13 dubbi, poi un campione per tipo; il resto lo correggi quando lo vedi in gioco.
+
+**Dubbi decisi il 2026-11-17:** Destiny's Edge = Lama del Destino, Fissure of Woe = Fenditura del Male (GW1 ufficiale),
+Tyrian/Tyrians = di Tyria / Abitanti di Tyria, Frostfang = Zannagelida, HOPE = SPERANZA, Jorbreaker = Jorrone,
+The HMS Divinity = La R.N. Divinità, Applied Force = Forza Applicata, Juggernaut = Colosso (The Juggernaut = Il Colosso),
+Shadestep = Passo Tetro, Glitched Adventure = dell'Avventura Buggata, Lucky = Fortunato; Shadowstep = Passo nell'Ombra
+(GW1 ufficiale, anche in terms.toml).

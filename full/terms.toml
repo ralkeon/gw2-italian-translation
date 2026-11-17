@@ -1,7 +1,8 @@
 # Full Italian: term decisions (see TASTE.md).
 # it        = the name as shown; forms = other forms the context may need
 # gender    = m/f, number = s/p (for articles and agreement)
-# rejected  = never use these, in any form
+# rejected  = not the word for THIS term in this sense; the same word can be right elsewhere, by context
+#             (Monile: not the Trinket category, but "Lost Trinket" = "Monile Smarrito")
 # status    = approved (by the user) | proposed | pending (open question)
 # note      = why this word was chosen
 # context   = where the English word shows up and what it means there, with the evidence
@@ -2130,11 +2131,11 @@ context = "Fire/Frost/Shocking/Magnetic/Chaos/Dark/Light Aura = Aura di Fuoco/di
 [[term]]
 en = "Shadowstep"
 kind = "mechanic"
-it = "Passo dell'Ombra"
+it = "Passo nell'Ombra"
 gender = "m"
 status = "approved"
-note = "the DB already uses it"
-context = "the teleport of Thief and others; verb 'shadowstep to your target' = 'usa il Passo dell'Ombra verso il bersaglio'"
+note = "user 2026-11-17: GW1 official 'Shadow Step' = 'Passo nell'Ombra' (was Passo dell'Ombra, the DB's form)"
+context = "the teleport of Thief and others; verb 'shadowstep to your target' = 'usa il Passo nell'Ombra verso il bersaglio'"
 
 [[term]]
 en = "Stun"
@@ -2481,10 +2482,10 @@ kind = "item"
 it = "Ornamento"
 gender = "m"
 forms = { plural = "Ornamenti" }
-rejected = ["Gingillo", "Monile"]
+rejected = ["Gingillo"]
 status = "approved"
-note = "user's pick"
-context = "category of rings, amulets and accessories"
+note = "user's pick; Monile was only the discarded alternative: never for the category, but right for a small precious object (user 2026-11-17)"
+context = "category of rings, amulets and accessories ('Legendary Trinkets' = 'Ornamenti Leggendari', 'trade armor, weapons, trinkets' = 'ornamenti'). NOT the term: a small precious object in lore and flavor = monile ('Lost Trinket' = 'Monile Smarrito', 'a ceremonial trinket' = 'un monile cerimoniale'); a knick-knack or collectible = ninnolo ('Shiny Trinket' = 'Ninnolo Luccicante', 'Bag of Trinkets' = 'Sacchetto di Ninnoli')"
 
 [[term]]
 en = "Spear"

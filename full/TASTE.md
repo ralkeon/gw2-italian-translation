@@ -82,9 +82,11 @@ it).
    Mighty = Possente, Potent = Potente). Word order: the noun first, then the material/set
    adjective, then the qualifier ("Berserker's Draconic Leggings" = "Gambali Draconici da
    Berserker").
-9. **The user's word is final.** Words the user rejected are in `rejected` of each term and
-   must never come back for that term, in any form. A word rejected for one term may still
-   be right for another (Spettro: rejected for Revenant, used for Specter).
+9. **The user's word is final.** Words the user rejected are in `rejected` of each term: they
+   never come back as the Italian of that term in that sense. A rejected word is not banned from
+   the language: it can still be right in another context or for another thing (Spettro:
+   rejected for Revenant, used for Specter; Monile: not the Trinket category, but "Lost Trinket"
+   = "Monile Smarrito"). Decide by context, not by the list.
 
 ## Using a term in a text
 
