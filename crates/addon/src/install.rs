@@ -16,6 +16,7 @@ const MODULE_DIR: &str = "italian_translation";
 
 /// `tt_dir`: Text Translator's data folder (addons/text_translator).
 pub fn module(tt_dir: &Path) {
+    *TT_DIR.lock().unwrap() = Some(tt_dir.to_path_buf());
     let dir = tt_dir.join("modules").join(MODULE_DIR);
     if let Err(e) = fs::create_dir_all(&dir) {
         log::error!("cannot create {}: {e}", dir.display());
@@ -30,6 +31,49 @@ pub fn module(tt_dir: &Path) {
     if !config::get().install.module_worked {
         choose(&tt_dir.join("settings.toml"));
     }
+}
+
+/// Text Translator's cache of our module (cache.rs).
+pub fn cache_path(tt_dir: &Path) -> std::path::PathBuf {
+    tt_dir.join("modules").join(MODULE_DIR).join("cache.db")
+}
+
+/// The cache key our module.toml gives the shim (`--cache-key`): its rows in Text Translator's cache.
+pub fn cache_key() -> String {
+    let table: Option<toml::Table> = MODULE_TOML.parse().ok();
+    let args = table.as_ref().and_then(|t| t.get("args")).and_then(toml::Value::as_array);
+    args.and_then(|a| a.iter().position(|v| v.as_str() == Some("--cache-key")).and_then(|i| a.get(i + 1)))
+        .and_then(toml::Value::as_str)
+        .unwrap_or("it")
+        .to_owned()
+}
+
+/// Text Translator's folder, for refreshes_paused.
+static TT_DIR: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+/// Its last reading: (when, paused).
+static PAUSED: std::sync::Mutex<Option<(std::time::Instant, bool)>> = std::sync::Mutex::new(None);
+
+/// Whether Text Translator's Pause Refreshes is on (settings.toml `pause_refreshes`): the game then
+/// keeps the texts on screen as they are, new translations and the Show Translated Text key included.
+/// Read again every few seconds (the UI asks every frame).
+pub fn refreshes_paused() -> bool {
+    let Ok(mut last) = PAUSED.lock() else { return false };
+    if let Some((at, paused)) = *last
+        && at.elapsed() < std::time::Duration::from_secs(3)
+    {
+        return paused;
+    }
+    let paused = TT_DIR.lock().ok().and_then(|d| d.clone()).is_some_and(|d| read_paused(&d));
+    *last = Some((std::time::Instant::now(), paused));
+    paused
+}
+
+fn read_paused(tt_dir: &Path) -> bool {
+    std::fs::read_to_string(tt_dir.join("settings.toml"))
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("pause_refreshes").and_then(toml::Value::as_bool))
+        .unwrap_or(false)
 }
 
 /// The shim connected: the module works, Text Translator's choice is left alone from now on.
@@ -99,6 +143,12 @@ fn choose(settings: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cache_key_is_the_module_s() {
+        assert!(!cache_key().is_empty());
+        assert!(MODULE_TOML.contains(&format!("\"{}\"", cache_key())));
+    }
 
     #[test]
     fn chooses_the_module() {

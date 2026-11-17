@@ -7,7 +7,7 @@ use nexus::imgui::Ui;
 
 use crate::{
     config::{self, Config, Llm},
-    store,
+    install, store,
 };
 
 /// The fields as typed, until saved.
@@ -20,6 +20,12 @@ pub fn render(ui: &Ui) {
     let c = edit.get_or_insert_with(config::get);
 
     ui.text_disabled(concat!("Italian Translation v", env!("CARGO_PKG_VERSION")));
+    if install::refreshes_paused() {
+        ui.text_colored([0.95, 0.75, 0.3, 1.0], "Attenzione");
+        ui.text_wrapped(
+            "Pause Refreshes di Text Translator è attivo: i testi già a schermo non si aggiornano              (traduzioni nuove, tasto di Show Translated Text). Spegnilo nelle opzioni di Text Translator in Nexus.",
+        );
+    }
 
     // The variant: applied at once, not with "Salva" (it is no key to type).
     let mut full = config::get().full_italian;

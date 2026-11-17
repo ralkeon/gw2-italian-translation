@@ -88,6 +88,12 @@ pub fn render(ui: &Ui) {
 fn status(ui: &Ui) {
     if SHARED.shim_connected.load(Ordering::Relaxed) {
         ui.text_colored([0.4, 0.9, 0.4, 1.0], "Text Translator collegato");
+        if crate::install::refreshes_paused() {
+            ui.text_colored([0.95, 0.75, 0.3, 1.0], "Attenzione: Pause Refreshes è attivo");
+            ui.text_wrapped(
+                "Pause Refreshes di Text Translator è attivo: i testi già a schermo non si aggiornano              (traduzioni nuove, tasto di Show Translated Text). Spegnilo nelle opzioni di Text Translator in Nexus.",
+            );
+        }
     } else {
         ui.text_colored([0.9, 0.6, 0.3, 1.0], "In attesa di Text Translator");
         ui.text_wrapped(

@@ -31,7 +31,7 @@ use windows_sys::Win32::{
 };
 
 use crate::{
-    install,
+    cache, install,
     state::SHARED,
     store::{self, Seen},
     translate::{self, Job},
@@ -73,7 +73,13 @@ pub fn stop() {
 /// Sends a translation to the game. False if the shim is not connected or the pipe broke.
 pub fn send_text(id: u32, hash: u64, text: &str) -> bool {
     match proto::encode_text(id, hash, text) {
-        Ok(payload) => send(&payload),
+        Ok(payload) => {
+            let sent = send(&payload);
+            if sent {
+                cache::note(id, hash, text);
+            }
+            sent
+        }
         Err(e) => {
             log::warn!("text {id} not sent: {e}");
             false
@@ -134,6 +140,7 @@ fn session(req_name: &str, rep_name: &str) -> io::Result<()> {
     SHARED.shim_connected.store(true, Ordering::Relaxed);
     log::info!("shim connected");
     install::module_works();
+    cache::connected();
     let repaired = store::take_repaired();
     for (id, hash, it) in &repaired {
         send_text(*id, *hash, &store::shown(*id, *hash).unwrap_or_else(|| it.clone()));

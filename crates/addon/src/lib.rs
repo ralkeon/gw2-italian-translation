@@ -10,6 +10,7 @@
 //! Translations are shared with the other players through a global database (sync.rs).
 
 pub(crate) use gw2it_text::{markup, plural};
+mod cache;
 mod config;
 mod install;
 mod options;
@@ -56,10 +57,16 @@ fn load() {
 
     config::load(&dir.join("config.toml"));
     config::load_contributor(&dir.join("contributor.json"));
-    match get_addon_dir("text_translator") {
-        Ok(tt_dir) => install::module(&tt_dir),
-        Err(e) => log::error!("no Text Translator folder: {e}"),
-    }
+    let tt_dir = match get_addon_dir("text_translator") {
+        Ok(tt_dir) => {
+            install::module(&tt_dir);
+            Some(tt_dir)
+        }
+        Err(e) => {
+            log::error!("no Text Translator folder: {e}");
+            None
+        }
+    };
     let db = dir.join("strings.db");
     let backlog = match store::start(&db) {
         Ok(backlog) => backlog,
@@ -72,6 +79,9 @@ fn load() {
         log::info!("{} texts without a translation from earlier sessions: queued", backlog.len());
     }
     translate::start(backlog);
+    if let Some(tt_dir) = &tt_dir {
+        cache::start(tt_dir, &db);
+    }
     pipe::start();
     sync::start(db);
 
@@ -93,6 +103,7 @@ fn load() {
 
 fn unload() {
     // Our threads must be gone before Nexus frees the DLL code they run.
+    cache::stop();
     pipe::stop();
     sync::stop();
     translate::stop();

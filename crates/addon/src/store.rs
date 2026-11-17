@@ -23,7 +23,7 @@ use gw2it_text::{
 };
 use rusqlite::{Connection, named_params, params};
 
-use crate::{config, markup, pipe, plural, state::SHARED, translate::Job};
+use crate::{cache, config, markup, pipe, plural, state::SHARED, translate::Job};
 
 pub struct Seen {
     pub id: u32,
@@ -805,11 +805,15 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
                 }
                 Msg::Search { query, exact, reply } => searches.push((query, exact, reply)),
                 Msg::Resend => {
-                    let seen: Vec<(u32, i64)> = tx
-                        .prepare_cached("SELECT f.id, f.hash FROM full f JOIN strings s ON s.id = f.id AND s.hash = f.hash WHERE f.it <> ''")?
-                        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                    // The texts seen here, and those Text Translator's cache holds (cache.rs).
+                    let rows: Vec<(u32, i64, bool)> = tx
+                        .prepare_cached(
+                            "SELECT f.id, f.hash, EXISTS (SELECT 1 FROM strings s WHERE s.id = f.id AND s.hash = f.hash)
+                             FROM full f WHERE f.it <> ''",
+                        )?
+                        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
                         .collect::<rusqlite::Result<_>>()?;
-                    resend.extend(seen.into_iter().map(|(id, hash)| (id, hash as u64)));
+                    resend.extend(rows.into_iter().filter(|(id, hash, seen)| *seen || cache::wanted(*id, *hash as u64)).map(|(id, hash, _)| (id, hash as u64)));
                 }
             }
         }
@@ -934,7 +938,7 @@ impl Watch {
                 }
             }
             if mode
-                && seen
+                && (seen || cache::wanted(id, hash))
                 && let Some(text) = shown(id, hash)
             {
                 pipe::send_text(id, hash, &text);
@@ -979,7 +983,8 @@ impl Watch {
                     log::error!("map_it.db: {e}");
                 }
                 remember(id, hash, &it, manual);
-                if seen {
+                // Also a text not seen here: Text Translator's cache holds it or lacks it (cache.rs).
+                if seen || cache::wanted(id, hash) {
                     pipe::send_text(id, hash, &shown(id, hash).unwrap_or(it));
                 }
             }
