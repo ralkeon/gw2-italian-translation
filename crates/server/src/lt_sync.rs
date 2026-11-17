@@ -201,6 +201,19 @@ fn has_word(hay: &str, needle: &str) -> bool {
         })
 }
 
+/// Whether the Italian `it` (folded) renders the glossary's `want` for the English `term`: the same words, or,
+/// when the glossary's Italian starts with an article ("the Mists" = "le Nebbie", "incoming damage" = "lo Strike
+/// Damage subito"), the name alone: "nelle Nebbie" and "dello Strike Damage subito" have it, and the preposition
+/// and the article are the sentence's business.
+fn renders(it: &str, want: &str) -> bool {
+    let want = fold(want);
+    if has_word(it, &want) {
+        return true;
+    }
+    let article = ["il ", "lo ", "la ", "le ", "i ", "gli ", "l'"].iter().find_map(|a| want.strip_prefix(a));
+    article.is_some_and(|name| !name.is_empty() && has_word(it, name))
+}
+
 /// What the other module takes for {X}: capitalised words ("Pact", "Strong Bandit", "Hunter's") or a number.
 fn prefix_words(x: &str) -> bool {
     let number = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
@@ -317,7 +330,7 @@ impl Glossary {
         let mut out: Vec<(String, String)> = Vec::new();
         for term in self.find(&bare(en)) {
             let want = &self.terms[term];
-            if !has_word(&it, &fold(want)) && !out.iter().any(|(e, _)| e == term) {
+            if !renders(&it, want) && !out.iter().any(|(e, _)| e == term) {
                 out.push((term.to_owned(), want.clone()));
             }
         }
@@ -371,7 +384,7 @@ fn usable(en: &str, old: &str, new: &str, wanted: &[&(String, String)], strict: 
     new != old
         && !new.trim().is_empty()
         && new.chars().count() <= TEXT_MAX
-        && wanted.iter().all(|(_, it)| has_word(&folded, &fold(it)))
+        && wanted.iter().all(|(_, it)| renders(&folded, it))
         && markup::token_mismatch(en, new).is_empty()
         && old.contains("[pl:") == new.contains("[pl:")
         && old.matches('\n').count() == new.matches('\n').count()
@@ -613,7 +626,8 @@ mod tests {
             "exact": {"Junk": "Ciarpame", "Large Bone": "Large Bone", "Hard Wood Pulp": "Polpa di legno duro",
                       "Superior Rune of the Scholar": "Runa superiore dello studioso"},
             "terms": {"Lion's Arch": "Arco del Leone", "Raid God": "Dio dei raid", "Charr": "Charr", "Rune": "Runa",
-                      "Greatsword": "Spadone"},
+                      "Greatsword": "Spadone", "Mists": "Nebbie", "the Mists": "le Nebbie",
+                      "incoming damage": "lo Strike Damage subito"},
             "patterns": {"{X} Longbow": "Arco lungo {X}", "+{X}%% Might Duration": "+{X}%% Durata della Might"},
             "any_case": ["Rune"],
             "advice": {"staff": "\"Staff\" as a weapon is \"staffa\"."}
@@ -664,6 +678,41 @@ mod tests {
             "only the terms: the rune's name is an exact entry"
         );
         assert_eq!(g.advice_for("Wield a staff."), ["\"Staff\" as a weapon is \"staffa\"."]);
+    }
+
+    #[test]
+    fn a_term_with_the_and_an_article_takes_the_name_with_any_article() {
+        let g = glossary();
+        let want = vec![("the Mists".to_owned(), "le Nebbie".to_owned())];
+        // "le Nebbie" as is, with a preposition glued to the article, or with none: the name is there.
+        assert_eq!(g.plan("Lost in the Mists.", "Perso nelle Nebbie."), Plan::Ours);
+        assert_eq!(g.plan("Lost in the Mists.", "Perso tra le Nebbie."), Plan::Ours);
+        assert_eq!(g.plan("Lost in the Mists.", "Perso nella nebbia."), Plan::Ask(want.clone()));
+        // Not a longer word.
+        assert_eq!(g.plan("Lost in the Mists.", "Perso nei Nebbioni."), Plan::Ask(want.clone()));
+        // Any term whose Italian starts with an article: "dello Strike Damage subito" has it.
+        let damage = vec![("incoming damage".to_owned(), "lo Strike Damage subito".to_owned())];
+        assert_eq!(g.plan("Blocks half of incoming damage.", "Blocca metà dello Strike Damage subito."), Plan::Ours);
+        assert_eq!(g.plan("Blocks half of incoming damage.", "Blocca metà dei danni in arrivo."), Plan::Ask(damage));
+        // The model's answer goes by the same rule.
+        let wanted = [&want[0]];
+        assert!(usable("Lost in the Mists.", "Perso nella nebbia.", "Perso nelle Nebbie.", &wanted, false));
+        assert!(!usable("Lost in the Mists.", "Perso nella nebbia.", "Perso nei Nebbioni.", &wanted, false));
+    }
+
+    #[test]
+    fn plural_marks_are_free_when_the_text_keeps_one() {
+        // A name with [s]: the glossary's phrase has to be whole once the marks are taken out; how many
+        // [pl:] there are does not matter, only that there is one when there was one.
+        let w = ("Hardened Glove Panel".to_owned(), "Pannello di guanti in cuoio indurito".to_owned());
+        let en = "Warbeast Hardened Glove Panel[s]";
+        let old = "Pannello[pl:\"Pannelli\"] per guanti rinforzato[pl:\"rinforzati\"] Warbeast";
+        let new = "Pannello[pl:\"Pannelli\"] di guanti in cuoio indurito Warbeast";
+        assert!(usable(en, old, new, &[&w], false));
+        // The phrase broken by another word (the prefix in the middle) is not the glossary's.
+        assert!(!usable(en, old, "Pannello[pl:\"Pannelli\"] Warbeast di guanti in cuoio indurito", &[&w], false));
+        // No mark left where there was one.
+        assert!(!usable(en, old, "Pannello di guanti in cuoio indurito Warbeast", &[&w], false));
     }
 
     #[test]
