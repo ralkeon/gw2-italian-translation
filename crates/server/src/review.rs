@@ -87,7 +87,7 @@ name does not change in the Italian plural (\"i Sunspear\", \"gli Elder Dragon\"
 \"The Wizard's Tower è\" and \"gli Elder Dragons\" are mistakes to fix. Runes and sigils by name stay whole in \
 English, with or without Superior, Major or Minor (\"Rune of the Daredevil\", \"Sigil of Exposure\", \"Ricetta: Sigil of \
 Agony\"), and so does Agony in item names (\"Infusione di Agony +5\", \"Lente di Agony rosa\"). The name of a skin or armor \
-set stays in English after the Italian noun (\"Ascia Painter's Brilliance\", \"Aspetto per spada Royal Flame\", \"Fucile \
+set stays in English after the Italian noun (\"Ascia Painter's Brilliance\", \"Skin per spada Royal Flame\", \"Fucile \
 dei Lightborne\"); \"Slumbering\" in an item name is \"sopito\" (\"Spada d'ossidiana sopita\", \"Fucile dei Lightborne sopiti\").
 - A condition or a disable stays in English only as its name or label: as a verb or a participle it stays Italian \
 (\"You were poisoned\" is \"Sei stato avvelenato\", \"knock back your foes\" is \"respingere i nemici\", never \"Sei stato \
@@ -105,7 +105,7 @@ The attributes \"Condition Damage\", \"Condition Duration\" and \"Boon Duration\
 If in a text such a word is not the mechanic, the weapon or the attribute (\"your help was a great boon\", \"focus your mind\", \"the power of the gods\", \"you might need help\", \"they fear us\"), leave it translated and \
 add \"mechanic\": false.
 - \"glossary\": how these English words are translated; use these Italian forms, but only where the English word has \
-that sense: \"party\" as a celebration is \"festa\", not \"gruppo\"; the \"skin\" of a body is \"pelle\", not \"aspetto\"; \
+that sense: \"party\" as a celebration is \"festa\", not \"gruppo\"; the \"skin\" of a body is \"pelle\", not \"skin\", while a cosmetic \"skin\" of the game stays \"skin\" (feminine, never changed in the plural: \"la skin\", \"le skin\", never \"aspetto\"); \
 \"ogre\" is \"orco\", and an Italian word is never replaced by the English one (\"orchi\" stays \"orchi\"). Never drop words or a \
 suffix in brackets that the old Italian and the English both have (\"(Raro)\", \"(Maestro)\", \"Crimson Skull Bandits\"), never \
 add a name that is not in the English, and never add an English plural -s to an English name (\"dei Rift\", not \"dei Rifts\"). \
@@ -288,8 +288,8 @@ fn prefix_with_di(names: &Names, en: &str, old: &str, new: &str) -> bool {
 }
 
 /// The words a glossary term has in another sense, that a fix may not turn into the glossary's:
-/// a "party" that is a celebration (festa, not gruppo), the "skin" of a body (pelle, not aspetto).
-const OTHER_SENSES: &[(&str, &[&str])] = &[("gruppo", &["festa", "feste"]), ("aspetto", &["pelle", "pelli"]), ("aspetti", &["pelle", "pelli"])];
+/// a "party" that is a celebration (festa, not gruppo), the "skin" of a body (pelle, not skin).
+const OTHER_SENSES: &[(&str, &[&str])] = &[("gruppo", &["festa", "feste"]), ("skin", &["pelle", "pelli"])];
 
 /// Whether `new` replaced a word of `old` in another sense with the glossary's ("festa" became "gruppo").
 fn other_sense(old: &str, new: &str) -> bool {
@@ -576,7 +576,7 @@ mod checks {
     #[test]
     fn a_glossary_word_only_in_its_sense() {
         assert!(other_sense("Evita che la festa dei troll degeneri.", "Evita che il gruppo dei troll degeneri."));
-        assert!(other_sense("tocchi la tua pelle", "tocchi il tuo aspetto"));
+        assert!(other_sense("tocchi la tua pelle", "tocchi la tua skin"));
         assert!(!other_sense("Invita nel party", "Invita nel gruppo"));
         assert!(!other_sense("Unisciti al squadra", "Unisciti al gruppo"));
     }
