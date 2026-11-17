@@ -210,11 +210,17 @@ fn main() {
         };
         let db = std::path::Path::new(&db).exists().then_some(db);
         match gw2dat::run(&dat, &seeds, &out, db.as_deref(), options.remove("--file").as_deref()) {
-            Ok(r) => println!(
-                "gw2dat: {} entries ({} read again), {} English files, {} placed in a block; texts: {} plain, {} opened with a seed, \
-                 {} encrypted without a seed, {} seeds that do not fit, {} empty",
-                r.scanned, r.rescanned, r.english_files, r.with_block, r.plain, r.seeded, r.no_seed, r.bad_seed, r.empty
-            ),
+            Ok(r) => {
+                println!(
+                    "gw2dat: {} entries ({} read again), {} English files, {} placed in a block; texts: {} plain, {} opened with a seed, \
+                     {} encrypted without a seed, {} seeds that do not fit, {} empty",
+                    r.scanned, r.rescanned, r.english_files, r.with_block, r.plain, r.seeded, r.no_seed, r.bad_seed, r.empty
+                );
+                println!(
+                    "gw2dat: strs files per language code {:?}; other languages: {} files, {} placed, {} ambiguous, {} texts, {} seeds that do not fit",
+                    r.langs, r.other_files, r.other_placed, r.other_ambiguous, r.other_texts, r.other_bad_seed
+                );
+            }
             Err(e) => {
                 eprintln!("gw2dat: {e}");
                 std::process::exit(1);

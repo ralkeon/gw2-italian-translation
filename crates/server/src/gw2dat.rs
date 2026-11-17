@@ -17,6 +17,11 @@
 //! scan of the archive is kept in the output file: the next run reads again only what a patch
 //! changed. The output is written to a temporary file and renamed: bulk never reads half of it.
 //!
+//! The same texts in the other languages of the client (French, German, Spanish) go to the table
+//! `other (key, lang, text)`: references for whoever translates (agents), never copied. A file of
+//! another language has the same last byte, the same number of texts and the same empty and plain
+//! places as its English file; among those, the seeds pick the one whose texts they open.
+//!
 //! The archive format and the decompression are those documented by the community tools
 //! (gw2dattools, Gw2Browser); written here from scratch.
 
@@ -32,6 +37,14 @@ use rusqlite::{Connection, OptionalExtension, params};
 const STRS_MAX: u32 = 8 * 1024 * 1024;
 /// Seeds tried per candidate block before deciding.
 const SEEDS_TRIED: usize = 60;
+/// The languages kept besides English: (code in the strs tail, name in the table `other`).
+const OTHER_LANGS: &[(u8, &str)] = &[(2, "fr"), (3, "de"), (4, "es")];
+/// Share of a file's places that must agree (empty / plain / encrypted) with its English file.
+const SAME_SHAPE: f64 = 0.95;
+
+fn lang_name(code: u8) -> Option<&'static str> {
+    OTHER_LANGS.iter().find(|(c, _)| *c == code).map(|(_, n)| *n)
+}
 
 // ---------------------------------------------------------------- the archive
 
@@ -603,15 +616,27 @@ pub struct Report {
     pub no_seed: usize,
     pub bad_seed: usize,
     pub empty: usize,
+    /// strs files per language code (all of them, kept or not).
+    pub langs: std::collections::BTreeMap<u8, usize>,
+    pub other_files: usize,
+    pub other_placed: usize,
+    pub other_ambiguous: usize,
+    pub other_texts: usize,
+    pub other_bad_seed: usize,
 }
 
 const OUT_SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS texts (key INTEGER PRIMARY KEY, en TEXT NOT NULL, how TEXT NOT NULL, file INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS files (file INTEGER PRIMARY KEY, idx INTEGER NOT NULL, block INTEGER, entries INTEGER NOT NULL,
     plain INTEGER NOT NULL, seeded INTEGER NOT NULL, matched INTEGER NOT NULL);
--- The scan of the archive, to read again only what changed: english = 1 for an English strs file.
+CREATE TABLE IF NOT EXISTS other (key INTEGER NOT NULL, lang TEXT NOT NULL, text TEXT NOT NULL, file INTEGER NOT NULL,
+    PRIMARY KEY (key, lang)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS other_files (file INTEGER PRIMARY KEY, idx INTEGER NOT NULL, lang TEXT NOT NULL, block INTEGER,
+    entries INTEGER NOT NULL, texts INTEGER NOT NULL, english INTEGER);
+-- The scan of the archive, to read again only what changed: lang = the language code of a strs
+-- file, -1 for any other file.
 CREATE TABLE IF NOT EXISTS scan (idx INTEGER PRIMARY KEY, offset INTEGER NOT NULL, size INTEGER NOT NULL, crc INTEGER NOT NULL,
-    english INTEGER NOT NULL);
+    lang INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
 ";
 
@@ -677,51 +702,60 @@ pub fn run(dat_path: &str, seeds_path: &str, out_path: &str, db: Option<&str>, m
     out.execute_batch(OUT_SCHEMA).map_err(|e| e.to_string())?;
 
     // The previous scan: unchanged entries are not read again.
-    let mut previous: HashMap<u32, (Entry, bool)> = HashMap::new();
+    let mut previous: HashMap<u32, (Entry, i64)> = HashMap::new();
     if std::path::Path::new(out_path).exists() {
         let old = Connection::open_with_flags(out_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| e.to_string())?;
         let has = old.query_row("SELECT 1 FROM sqlite_master WHERE name = 'scan'", [], |_| Ok(())).optional().map_err(|e| e.to_string())?;
-        if has.is_some() {
-            let mut stmt = old.prepare("SELECT idx, offset, size, crc, english FROM scan").map_err(|e| e.to_string())?;
+        // A scan without the column lang (English only, before 2026-11-18) is read again whole.
+        if let Some(mut stmt) = has.and_then(|_| old.prepare("SELECT idx, offset, size, crc, lang FROM scan").ok()) {
             let rows = stmt
                 .query_map([], |r| {
-                    Ok((r.get::<_, i64>(0)? as u32, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u32, r.get::<_, i64>(3)? as u32, r.get::<_, bool>(4)?))
+                    Ok((r.get::<_, i64>(0)? as u32, r.get::<_, i64>(1)? as u64, r.get::<_, i64>(2)? as u32, r.get::<_, i64>(3)? as u32, r.get::<_, i64>(4)?))
                 })
                 .map_err(|e| e.to_string())?;
-            for (idx, offset, size, crc, english) in rows.flatten() {
-                previous.insert(idx, (Entry { offset, size, compressed: false, crc }, english));
+            for (idx, offset, size, crc, lang) in rows.flatten() {
+                previous.insert(idx, (Entry { offset, size, compressed: false, crc }, lang));
             }
         }
     }
 
-    // 1. The English strs files: (current file ID, MFT index, texts, tail).
+    // 1. The strs files of English and of the other languages kept: (current file ID, MFT index, texts, block modulo 255).
     let mut indices: Vec<(u32, u32)> = dat.top.iter().filter(|(i, _)| **i > 2).map(|(i, f)| (*i, *f)).collect();
     indices.sort();
     let mut files = Vec::new();
+    let mut others: Vec<(u32, u32, Vec<StrsEntry>, u8, &'static str)> = Vec::new();
     let tx = out.unchecked_transaction().map_err(|e| e.to_string())?;
     {
-        let mut put = tx.prepare("INSERT OR REPLACE INTO scan (idx, offset, size, crc, english) VALUES (?1, ?2, ?3, ?4, ?5)").map_err(|e| e.to_string())?;
+        let mut put = tx.prepare("INSERT OR REPLACE INTO scan (idx, offset, size, crc, lang) VALUES (?1, ?2, ?3, ?4, ?5)").map_err(|e| e.to_string())?;
+        let kept = |lang: i64| lang == 0 || u8::try_from(lang).is_ok_and(|l| lang_name(l).is_some());
         for &(idx, file_id) in &indices {
             let Some(e) = dat.entry(idx) else { continue };
             report.scanned += 1;
-            let same = previous.get(&idx).filter(|(p, _)| p.offset == e.offset && p.size == e.size && p.crc == e.crc).map(|(_, english)| *english);
-            let english = match same {
-                Some(false) => false,
-                Some(true) | None => {
+            let same = previous.get(&idx).filter(|(p, _)| p.offset == e.offset && p.size == e.size && p.crc == e.crc).map(|(_, lang)| *lang);
+            let lang = match same {
+                Some(lang) if !kept(lang) => lang,
+                _ => {
                     if same.is_none() {
                         report.rescanned += 1;
                     }
-                    let candidate = (16..=STRS_MAX).contains(&e.size) && (same == Some(true) || dat.read_raw(e, Some(4)).is_ok_and(|b| b == b"strs"));
+                    let candidate = (16..=STRS_MAX).contains(&e.size) && (same.is_some() || dat.read_raw(e, Some(4)).is_ok_and(|b| b == b"strs"));
                     match candidate.then(|| dat.read_raw(e, None)).and_then(Result::ok).and_then(|d| parse_strs(&d)) {
-                        Some((entries, tail)) if tail.len() == 2 && tail[0] == 0 => {
-                            files.push((file_id, idx, entries, tail[1]));
-                            true
+                        Some((entries, tail)) if tail.len() == 2 => {
+                            if tail[0] == 0 {
+                                files.push((file_id, idx, entries, tail[1]));
+                            } else if let Some(name) = lang_name(tail[0]) {
+                                others.push((file_id, idx, entries, tail[1], name));
+                            }
+                            tail[0] as i64
                         }
-                        _ => false,
+                        _ => -1,
                     }
                 }
             };
-            put.execute(params![idx, e.offset as i64, e.size, e.crc, english]).map_err(|e| e.to_string())?;
+            if lang >= 0 {
+                *report.langs.entry(lang as u8).or_default() += 1;
+            }
+            put.execute(params![idx, e.offset as i64, e.size, e.crc, lang]).map_err(|e| e.to_string())?;
         }
     }
     tx.commit().map_err(|e| e.to_string())?;
@@ -748,6 +782,47 @@ pub fn run(dat_path: &str, seeds_path: &str, out_path: &str, db: Option<&str>, m
         }
     }
     report.with_block = block_of.len();
+
+    // 2b. The block of each file of another language: an English file placed in a block, with the
+    // same last byte, number of texts and shape (empty, plain or encrypted at the same places);
+    // when more than one fits, the one whose seeds open the most of its texts, if alone.
+    report.other_files = others.len();
+    let mut by_shape: HashMap<(u8, usize), Vec<usize>> = HashMap::new();
+    for (n, (_, _, entries, low)) in files.iter().enumerate() {
+        if block_of.contains_key(&n) {
+            by_shape.entry((*low, entries.len())).or_default().push(n);
+        }
+    }
+    let kind = |e: &StrsEntry| if e.data.is_empty() { 0 } else if e.bps == 16 { 1 } else { 2 };
+    let none: HashMap<u32, HashSet<String>> = HashMap::new();
+    let mut other_block: HashMap<usize, (u32, u32)> = HashMap::new();
+    let mut taken: HashSet<(&str, u32)> = HashSet::new();
+    for (m, (_, _, entries, low, lang)) in others.iter().enumerate() {
+        let mut scored: Vec<(usize, usize, usize)> = Vec::new();
+        for &n in by_shape.get(&(*low, entries.len())).into_iter().flatten() {
+            let en = &files[n].2;
+            let same = entries.iter().zip(en).filter(|(a, b)| kind(a) == kind(b)).count();
+            if (same as f64) < SAME_SHAPE * entries.len() as f64 {
+                continue;
+            }
+            let (_, opened, _) = evidence(entries, block_of[&n], &seeds, &none);
+            scored.push((opened, same, n));
+        }
+        scored.sort_by(|a, b| b.cmp(a));
+        let alone = match scored.as_slice() {
+            [] => None,
+            [one] => Some(one.2),
+            [a, b, ..] => (a.0 > b.0 || (a.0 == b.0 && a.1 > b.1)).then_some(a.2),
+        };
+        match alone {
+            Some(n) if taken.insert((lang, block_of[&n])) => {
+                other_block.insert(m, (block_of[&n], files[n].0));
+            }
+            _ if !scored.is_empty() => report.other_ambiguous += 1,
+            _ => {}
+        }
+    }
+    report.other_placed = other_block.len();
 
     // 3. The texts.
     let tx = out.unchecked_transaction().map_err(|e| e.to_string())?;
@@ -797,6 +872,44 @@ pub fn run(dat_path: &str, seeds_path: &str, out_path: &str, db: Option<&str>, m
             report.plain += plain_n;
             report.seeded += seeded_n;
             file.execute(params![file_id, idx, block, entries.len(), plain_n, seeded_n, matched]).map_err(|e| e.to_string())?;
+        }
+        let mut put_other = tx.prepare("INSERT OR REPLACE INTO other (key, lang, text, file) VALUES (?1, ?2, ?3, ?4)").map_err(|e| e.to_string())?;
+        let mut other_file = tx
+            .prepare("INSERT OR REPLACE INTO other_files (file, idx, lang, block, entries, texts, english) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)")
+            .map_err(|e| e.to_string())?;
+        for (m, (file_id, idx, entries, _, lang)) in others.iter().enumerate() {
+            let placed = other_block.get(&m).copied();
+            let mut texts = 0;
+            if let Some((block, _)) = placed {
+                for (i, e) in entries.iter().enumerate() {
+                    if e.data.is_empty() {
+                        continue;
+                    }
+                    let key = block * 1024 + i as u32;
+                    let t = if e.bps == 16 {
+                        plain(&e.data)
+                    } else if let Some(&seed) = seeds.get(&key) {
+                        match decode(&e.data, e.dec_off, e.bps, seed) {
+                            Some(t) => t,
+                            None => {
+                                report.other_bad_seed += 1;
+                                continue;
+                            }
+                        }
+                    } else {
+                        continue;
+                    };
+                    if !worth(&t) {
+                        continue;
+                    }
+                    texts += 1;
+                    put_other.execute(params![key, lang, t, file_id]).map_err(|e| e.to_string())?;
+                }
+            }
+            report.other_texts += texts;
+            other_file
+                .execute(params![file_id, idx, lang, placed.map(|p| p.0), entries.len(), texts, placed.map(|p| p.1)])
+                .map_err(|e| e.to_string())?;
         }
         let mut meta = tx.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES (?1, ?2)").map_err(|e| e.to_string())?;
         meta.execute(params!["run", format!("{} {:?}", crate::now_ms(), report)]).map_err(|e| e.to_string())?;
