@@ -72,7 +72,8 @@ anything again, do not change the rest, add nothing. Keep every %token%, every <
 glossary's advice on some words of the text: follow them.
 
 A term is meant only where the English uses it as the glossary's name or word: where it is a verb, a common word of \
-the sentence or another thing (\"might\" a verb, \"focus your mind\"), list its English in \"plain\" and leave that \
+the sentence or another thing (\"might\" a verb, \"focus your mind\", \"Skin Color\" the colour of the skin, not a \
+skin of the wardrobe), list its English in \"plain\" and leave that \
 part of the Italian as it is. When unsure, leave the Italian: a term left as it was is a small loss, a broken \
 sentence is not.
 
