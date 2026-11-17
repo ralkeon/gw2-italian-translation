@@ -14,6 +14,13 @@ attraverso l'addon [Text Translator](https://github.com/ideka/text-translator-pu
 > il nome originale in inglese, ripremilo per tornare all'italiano. Vale per entrambe le varianti
 > (ibrida e tutto in italiano); l'addon intanto continua a raccogliere e tradurre i testi.
 
+> [!WARNING]
+> **Testi che non si aggiornano?** Se un testo resta in inglese anche dopo che è stato tradotto, o se
+> premendo il tasto di Show Translated Text alcuni testi non tornano in inglese (o non tornano in
+> italiano), spegni **Pause Refreshes**: Nexus → opzioni dell'addon **Text Translator** (di Ideka)
+> → casella **Pause Refreshes**. Con i refresh in pausa il gioco non ridisegna i testi già a
+> schermo, che quindi non cambiano finché non li riapri.
+
 ## Disclaimer
 
 **EN** — Italian Translation is an unofficial, fan-made project. It is not affiliated with or
