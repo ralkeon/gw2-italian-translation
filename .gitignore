@@ -10,3 +10,6 @@
 *.db.tmp
 config.toml
 contributor.json
+
+# GW1 official texts (ArenaNet) and the local tool that reads them
+full/gw1/
