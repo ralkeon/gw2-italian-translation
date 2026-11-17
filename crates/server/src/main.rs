@@ -17,8 +17,8 @@
 //! gw2it-server review|plurals ... --ask-to <file> | --answers <file>   (no model: by hand, see byhand.rs)
 //! gw2it-server bulk [--db gw2it.db] --file texts.jsonl --translators translators.json [--max-texts N] [--dry-run]
 //!                                                                         (see bulk.rs)
-//! gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json] [--max-texts 2000] [--dry-run]
-//!                                                                         (see lt_sync.rs)
+//! gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json | --ask-to <file> | --answers <file>]
+//!              [--max-texts 2000] [--from-last] [--dry-run]               (see lt_sync.rs)
 
 use std::{
     collections::HashMap,
@@ -112,7 +112,7 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server import-glossary --file glossary_it.json [--excluded glossary-import-excluded.json] [--db gw2it.db] [--dry-run]
        gw2it-server repair [--db gw2it.db] [--dry-run]
        gw2it-server bulk [--db gw2it.db] --file texts.jsonl --translators translators.json [--max-texts N] [--dry-run]
-       gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json] [--max-texts 2000] [--dry-run]";
+       gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json | --ask-to <file> | --answers <file>] [--max-texts 2000] [--from-last] [--dry-run]";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -131,7 +131,8 @@ fn main() {
     let dry_run = args.iter().any(|a| a == "--dry-run");
     let include_manual = args.iter().any(|a| a == "--include-manual");
     let fetch = args.iter().any(|a| a == "--fetch");
-    args.retain(|a| a != "--dry-run" && a != "--include-manual" && a != "--fetch");
+    let from_last = args.iter().any(|a| a == "--from-last");
+    args.retain(|a| a != "--dry-run" && a != "--include-manual" && a != "--fetch" && a != "--from-last");
     let mut options = HashMap::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -209,7 +210,9 @@ fn main() {
             std::process::exit(2);
         };
         let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(lt_sync::MAX_TEXTS);
-        lt_sync::command(&db, &glossary, options.remove("--translators").as_deref(), max_texts, dry_run);
+        // The model of translators.json or the answers by hand; with neither, only what needs no model.
+        let ask = ["--translators", "--ask-to", "--answers"].iter().any(|o| options.contains_key(*o)).then(|| model(&mut options));
+        lt_sync::command(&db, &glossary, ask.as_deref(), &lt_sync::Options { dry_run, max_texts, from_last });
         return;
     }
     if import {

@@ -18,6 +18,12 @@
 //! - `hybrid`: else our Italian as it is.
 //!
 //! A name with plural marks ("Large Bone[s]") is looked up in the singular, as the other module does.
+//!
+//! By hand (byhand.rs): `--ask-to <file> --dry-run` writes the texts the model would get, `--answers
+//! <file>` reads an answer for each ({"it": ..., "plain": [...]}); a text with no answer stays as it is,
+//! and the rewrite is checked for the markup, the plural marks and the glossary's Italian, not for
+//! the words around it (that judgment is the person's). `--from-last` takes the texts from the last
+//! ID: a session by hand does not work on the ones the night's model takes first.
 //! A row is made again only when our Italian or what the glossary says for it changes. The texts we
 //! do not have are not here: the owner of the glossary has them already. The copy follows the
 //! imported glossary, not our rules (runes, sigils and relics translated, for one), and nothing of
@@ -43,7 +49,7 @@ CREATE TABLE IF NOT EXISTS lt_sync (
     hash    TEXT    NOT NULL,
     en      TEXT    NOT NULL,
     it      TEXT    NOT NULL,
-    source  TEXT    NOT NULL,  -- hybrid, exact, term, pattern, term-llm, pending, failed
+    source  TEXT    NOT NULL,  -- hybrid, exact, term, pattern, term-llm, term-hand, pending, failed
     ours    TEXT    NOT NULL,  -- XXH3-64 of our Italian it was made from: made again when ours changes
     rule    TEXT    NOT NULL,  -- XXH3-64 of what the glossary says for the text: made again when it changes
     tries   INTEGER NOT NULL DEFAULT 0,
@@ -61,8 +67,6 @@ pub const MAX_TEXTS: usize = 2000;
 const GLOSSARY_MAX: u64 = 64 << 20;
 /// Rows written in one transaction: the server's own writes wait at most a moment.
 const STEP: usize = 5000;
-/// How long the job waits in a row for busy language models before it stops.
-const PATIENCE: Duration = Duration::from_secs(2 * 3600);
 
 const SYSTEM: &str = "You adapt the Italian translation of texts of the game Guild Wars 2 to a glossary. \
 Each text has the English (\"en\"), its Italian (\"it\") and \"use\": terms of the English with the Italian the glossary \
@@ -359,8 +363,9 @@ impl Glossary {
 }
 
 /// Whether the model's `new` for `old` can go into the copy: the wanted Italian there, the markup,
-/// the plural marks and the line breaks of before, and only words swapped (names::swaps_only).
-fn usable(en: &str, old: &str, new: &str, wanted: &[&(String, String)]) -> bool {
+/// the plural marks and the line breaks of before, and, for a model (`strict`), only words swapped
+/// (names::swaps_only).
+fn usable(en: &str, old: &str, new: &str, wanted: &[&(String, String)], strict: bool) -> bool {
     let folded = fold(&bare(new));
     let keep: Vec<&str> = wanted.iter().map(|(_, it)| it.as_str()).collect();
     new != old
@@ -370,13 +375,15 @@ fn usable(en: &str, old: &str, new: &str, wanted: &[&(String, String)]) -> bool 
         && markup::token_mismatch(en, new).is_empty()
         && old.contains("[pl:") == new.contains("[pl:")
         && old.matches('\n').count() == new.matches('\n').count()
-        && names::swaps_only(en, old, new, &keep)
+        && (!strict || names::swaps_only(en, old, new, &keep))
 }
 
 pub struct Options {
     pub dry_run: bool,
     /// Texts given to the model in this run.
     pub max_texts: usize,
+    /// The texts from the last ID.
+    pub from_last: bool,
 }
 
 #[derive(Default, Debug)]
@@ -474,6 +481,9 @@ pub fn run(con: &Connection, glossary: &Glossary, ask: Option<&names::Ask>, opti
 
     // The model puts the glossary's terms in.
     report.waiting = todo.len();
+    if options.from_last {
+        todo.reverse();
+    }
     let todo = &todo[..todo.len().min(options.max_texts)];
     if let Some(ask) = ask {
         for chunk in todo.chunks(BATCH) {
@@ -500,18 +510,25 @@ pub fn run(con: &Connection, glossary: &Glossary, ask: Option<&names::Ask>, opti
                 }
             };
             report.asked += chunk.len();
+            // By hand: a text with no answer stays for later, and the words are the person's judgment.
+            let by_hand = answer[crate::byhand::FLAG] == true;
+            let mut answered = vec![false; chunk.len()];
             let mut said: Vec<(Option<String>, Vec<String>)> = vec![(None, Vec::new()); chunk.len()];
             for t in answer["texts"].as_array().map(Vec::as_slice).unwrap_or_default() {
                 let Some(n) = t["n"].as_u64().map(|n| n as usize).filter(|&n| n < chunk.len()) else { continue };
                 let plain = t["plain"].as_array().map(Vec::as_slice).unwrap_or_default().iter().filter_map(Value::as_str).map(str::to_owned).collect();
                 said[n] = (t["it"].as_str().map(markup::straight_quotes), plain);
+                answered[n] = true;
             }
-            for ((row, needs, tries), (it, plain)) in chunk.iter().zip(said) {
+            for (((row, needs, tries), (it, plain)), answered) in chunk.iter().zip(said).zip(answered) {
+                if by_hand && !answered {
+                    continue;
+                }
                 let wanted: Vec<&(String, String)> = needs.iter().filter(|(en, _)| !plain.contains(en)).collect();
                 let outcome = if wanted.is_empty() {
                     Some(("hybrid", row.it.clone()))
                 } else {
-                    it.filter(|it| usable(&row.en, &row.it, it, &wanted)).map(|it| ("term-llm", it))
+                    it.filter(|it| usable(&row.en, &row.it, it, &wanted, !by_hand)).map(|it| (if by_hand { "term-hand" } else { "term-llm" }, it))
                 };
                 let (source, it, tries) = match outcome {
                     Some(("hybrid", it)) => {
@@ -560,19 +577,15 @@ fn read_glossary(from: &str) -> Result<Value, String> {
     serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
-/// `gw2it-server lt-sync`: see the top of this file.
-pub fn command(db: &str, from: &str, translators_file: Option<&str>, max_texts: usize, dry_run: bool) {
+/// `gw2it-server lt-sync`: see the top of this file. `ask`: the model, or the answers by hand.
+pub fn command(db: &str, from: &str, ask: Option<&names::Ask>, options: &Options) {
     let fail = |what: String| -> ! {
         eprintln!("lt-sync: {what}");
         std::process::exit(1);
     };
     let glossary = read_glossary(from).and_then(|g| Glossary::from_json(&g)).unwrap_or_else(|e| fail(format!("glossary: {e}")));
     let con = crate::open(db).and_then(|c| c.execute_batch(SCHEMA).map(|_| c)).unwrap_or_else(|e| fail(format!("cannot open {db}: {e}")));
-    let mut chain = gw2it_translate::Chain::default();
-    chain.set(translators_file.map(crate::translators).unwrap_or_default());
-    let ask = |system: &str, user: &str| chain.ask_patiently(system, user, PATIENCE).map_err(|e| e.to_string());
-    let ask: Option<&names::Ask> = if chain.is_empty() { None } else { Some(&ask) };
-    match run(&con, &glossary, ask, &Options { dry_run, max_texts }) {
+    match run(&con, &glossary, ask, options) {
         Ok(r) => println!(
             "lt-sync: {} rows, {} made again, {} removed; model: {} waiting, {} asked, {} rewritten, {} plain, {} failed; copy: {}{}{}",
             r.rows,
@@ -584,7 +597,7 @@ pub fn command(db: &str, from: &str, translators_file: Option<&str>, max_texts: 
             r.plain,
             r.failed,
             r.sources.iter().map(|(s, n)| format!("{s} {n}")).collect::<Vec<_>>().join(", "),
-            if dry_run { " (dry run: nothing changed)" } else { "" },
+            if options.dry_run { " (dry run: nothing changed)" } else { "" },
             r.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),
         ),
         Err(e) => fail(format!("database: {e}")),
@@ -658,11 +671,14 @@ mod tests {
         let w = ("Lion's Arch".to_owned(), "Arco del Leone".to_owned());
         let en = "Meet me in %str1%Lion's Arch%str2%.";
         let old = "Incontrami a %str1%Lion's Arch%str2%.";
-        assert!(usable(en, old, "Incontrami all'%str1%Arco del Leone%str2%.", &[&w]));
+        assert!(usable(en, old, "Incontrami all'%str1%Arco del Leone%str2%.", &[&w], true));
         // The markup lost, the term missing, a word invented.
-        assert!(!usable(en, old, "Incontrami all'Arco del Leone.", &[&w]));
-        assert!(!usable(en, old, "Incontrami a %str1%Lion's Arch%str2%, presto.", &[&w]));
-        assert!(!usable(en, old, "Incontrami subito all'%str1%Arco del Leone%str2%.", &[&w]));
+        assert!(!usable(en, old, "Incontrami all'Arco del Leone.", &[&w], true));
+        assert!(!usable(en, old, "Incontrami a %str1%Lion's Arch%str2%, presto.", &[&w], true));
+        assert!(!usable(en, old, "Incontrami subito all'%str1%Arco del Leone%str2%.", &[&w], true));
+        // By hand: the words around are the person's, the markup and the term are still checked.
+        assert!(usable(en, old, "Incontrami subito all'%str1%Arco del Leone%str2%.", &[&w], false));
+        assert!(!usable(en, old, "Incontrami all'Arco del Leone.", &[&w], false));
     }
 
     fn db() -> Connection {
@@ -688,7 +704,7 @@ mod tests {
     fn the_copy_follows_the_glossary_and_is_made_again_only_on_a_change() {
         let con = db();
         let g = glossary();
-        let options = Options { dry_run: false, max_texts: 10 };
+        let options = Options { dry_run: false, max_texts: 10, from_last: false };
         let ask = |_: &str, user: &str| -> Result<Value, String> {
             assert!(user.contains(r#""use":[{"en":"Lion's Arch","it":"Arco del Leone"}]"#), "{user}");
             Ok(json!({"texts": [{"n": 0, "it": "Incontrami all'Arco del Leone."}, {"n": 1, "it": "Prega il dio del raid."}]}))
@@ -729,17 +745,33 @@ mod tests {
     fn plain_words_keep_ours_and_a_dry_run_writes_nothing() {
         let con = db();
         let g = glossary();
-        let r = run(&con, &g, None, &Options { dry_run: true, max_texts: 10 }).unwrap();
+        let r = run(&con, &g, None, &Options { dry_run: true, max_texts: 10, from_last: false }).unwrap();
         assert_eq!((r.made, r.waiting), (4, 2));
         let n: i64 = con.query_row("SELECT count(*) FROM lt_sync", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);
         let plain = |_: &str, _: &str| -> Result<Value, String> {
             Ok(json!({"texts": [{"n": 0, "it": "Incontrami a Lion's Arch.", "plain": ["Lion's Arch"]}, {"n": 1, "plain": ["raid god"]}]}))
         };
-        let r = run(&con, &g, Some(&plain), &Options { dry_run: false, max_texts: 1 }).unwrap();
+        let r = run(&con, &g, Some(&plain), &Options { dry_run: false, max_texts: 1, from_last: false }).unwrap();
         // max_texts: one text this time.
         assert_eq!((r.asked, r.plain), (1, 1));
         assert_eq!(row(&con, 2), ("Incontrami a Lion's Arch.".into(), "hybrid".into(), 0));
         assert_eq!(row(&con, 4).1, "pending");
+    }
+
+    #[test]
+    fn answers_by_hand_take_the_last_texts_first_and_leave_the_unanswered_ones() {
+        let con = db();
+        let g = glossary();
+        let options = Options { dry_run: false, max_texts: 10, from_last: true };
+        // Only the raid god answered, with a word of its own: by hand, accepted.
+        let hand = |_: &str, user: &str| -> Result<Value, String> {
+            assert!(user.find("raid god").unwrap() < user.find("Lion").unwrap(), "{user}");
+            Ok(json!({"texts": [{"n": 0, "it": "Prega il buon dio dei raid."}], crate::byhand::FLAG: true}))
+        };
+        let r = run(&con, &g, Some(&hand), &options).unwrap();
+        assert_eq!((r.asked, r.rewritten, r.failed), (2, 1, 0));
+        assert_eq!(row(&con, 4), ("Prega il buon dio dei raid.".into(), "term-hand".into(), 0));
+        assert_eq!(row(&con, 2), ("Incontrami a Lion's Arch.".into(), "pending".into(), 0));
     }
 }
