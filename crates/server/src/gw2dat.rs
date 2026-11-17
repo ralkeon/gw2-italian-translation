@@ -524,6 +524,10 @@ const TYPOGRAPHIC: &[char] = &['\u{2013}', '\u{2014}', '\u{2018}', '\u{2019}', '
 /// to the text can still pass decode()'s padding check by chance: what it opens is then a run of
 /// CJK and other far characters ("⌚⻼ಞ㑰˸…"), which an English text never is.
 fn worth(en: &str) -> bool {
+    // The developers' placeholders of texts never filled (about 24,000 in 2026).
+    if ["[null]", "(new string)"].contains(&en.trim()) {
+        return false;
+    }
     let far = en.chars().filter(|c| *c as u32 > 0x2FF && !TYPOGRAPHIC.contains(c)).count();
     en.chars().any(char::is_alphabetic) && far * 20 <= en.chars().count() && far <= 3
 }
@@ -781,6 +785,7 @@ mod tests {
         assert!(worth("Knocks Down • Throws Grubs • Inflicts Vulnerability"));
         assert!(worth("“I carry the wind.” — Archers of the Dominion…"));
         assert!(!worth("⌚\u{2efc}ಞ㑰˸\u{2e75}㳢✊རᡉᴻŔ㑂㌳՟㵇ॷ㦅᜵㬩㞦ḃ⪐űᓽ⼊⢕"));
+        assert!(!worth("[null]") && !worth("(new string)"));
     }
 
     #[test]
