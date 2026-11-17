@@ -17,6 +17,8 @@
 //! gw2it-server review|plurals ... --ask-to <file> | --answers <file>   (no model: by hand, see byhand.rs)
 //! gw2it-server bulk [--db gw2it.db] --file texts.jsonl --translators translators.json [--max-texts N] [--dry-run]
 //!                                                                         (see bulk.rs)
+//! gw2it-server lt-sync [--db gw2it.db] [--lt-db lt_sync.db] --glossary <file or URL> [--translators translators.json]
+//!              [--max-texts 2000] [--dry-run]                             (see lt_sync.rs)
 
 use std::{
     collections::HashMap,
@@ -38,6 +40,7 @@ mod consistency;
 mod glossary;
 mod names;
 mod glossary_import;
+mod lt_sync;
 mod byhand;
 mod plurals;
 mod priority;
@@ -108,7 +111,8 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server review|plurals [--db gw2it.db] (--ask-to <file> | --answers <file>) [--max-texts 200] [--dry-run]
        gw2it-server import-glossary --file glossary_it.json [--excluded glossary-import-excluded.json] [--db gw2it.db] [--dry-run]
        gw2it-server repair [--db gw2it.db] [--dry-run]
-       gw2it-server bulk [--db gw2it.db] --file texts.jsonl --translators translators.json [--max-texts N] [--dry-run]";
+       gw2it-server bulk [--db gw2it.db] --file texts.jsonl --translators translators.json [--max-texts N] [--dry-run]
+       gw2it-server lt-sync [--db gw2it.db] [--lt-db lt_sync.db] --glossary <file or URL> [--translators translators.json] [--max-texts 2000] [--dry-run]";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -120,7 +124,8 @@ fn main() {
     let import = args.first().is_some_and(|a| a == "import-glossary");
     let repair = args.first().is_some_and(|a| a == "repair");
     let bulk = args.first().is_some_and(|a| a == "bulk");
-    if replicate || consistency || english_names || review || plurals || import || repair || bulk {
+    let lt_sync = args.first().is_some_and(|a| a == "lt-sync");
+    if replicate || consistency || english_names || review || plurals || import || repair || bulk || lt_sync {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -131,7 +136,7 @@ fn main() {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts" | "--review-daily" | "--file" | "--excluded" | "--ask-to" | "--answers"), Some(v)) => {
+            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts" | "--review-daily" | "--file" | "--excluded" | "--ask-to" | "--answers" | "--lt-db" | "--glossary"), Some(v)) => {
                 options.insert(name.to_owned(), v);
             }
             _ => {
@@ -196,6 +201,16 @@ fn main() {
         };
         let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(usize::MAX);
         run_bulk(&db, &file, &translators_file, max_texts, dry_run);
+        return;
+    }
+    if lt_sync {
+        let Some(glossary) = options.remove("--glossary") else {
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        };
+        let lt_db = options.remove("--lt-db").unwrap_or_else(|| "lt_sync.db".into());
+        let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(lt_sync::MAX_TEXTS);
+        lt_sync::command(&db, &lt_db, &glossary, options.remove("--translators").as_deref(), max_texts, dry_run);
         return;
     }
     if import {
