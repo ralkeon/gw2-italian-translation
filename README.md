@@ -3,6 +3,17 @@
 Addon per [Nexus](https://raidcore.gg/Nexus) che traduce in italiano i testi di Guild Wars 2,
 attraverso l'addon [Text Translator](https://github.com/ideka/text-translator-public) di Ideka.
 
+> [!IMPORTANT]
+> **🇬🇧 CON GLI ALTRI GIOCATORI USA SEMPRE I NOMI IN INGLESE**
+>
+> In chat, nelle richieste di aiuto, nelle discussioni, nelle segnalazioni e quando cerchi su wiki
+> o guide, **non usare i nomi tradotti**: la maggior parte dei giocatori, anche italiani, conosce
+> solo quelli inglesi, e wiki e guide sono in inglese.
+>
+> **Assegna in Nexus un tasto a Show Translated Text** (Text Translator): premilo per vedere al volo
+> il nome originale in inglese, ripremilo per tornare all'italiano.
+> [Dettagli](#quando-parli-con-altri-giocatori-usa-i-nomi-inglesi)
+
 ## Disclaimer
 
 **EN** — Italian Translation is an unofficial, fan-made project. It is not affiliated with or
@@ -86,9 +97,12 @@ Impostazioni e traduzioni stanno in `Guild Wars 2/addons/italian_translation/`
 
 ### Quando parli con altri giocatori, usa i nomi inglesi
 
+> [!WARNING]
+> Vale per entrambe le varianti, ibrida e tutto in italiano.
+
 Con qualunque variante, quando scrivi in chat, chiedi aiuto, partecipi a una discussione, cerchi
-sulla wiki o in una guida, o segnali un problema, usa sempre il nome originale inglese, non quello
-tradotto: la maggior parte dei giocatori (anche italiani) conosce e usa quelli, e le guide e la
+sulla wiki o in una guida, o segnali un problema, **usa sempre il nome originale inglese, non quello
+tradotto**: la maggior parte dei giocatori (anche italiani) conosce e usa quelli, e le guide e la
 wiki sono in inglese.
 
 Per vederlo, assegna in Nexus un tasto a **Show Translated Text** di Text Translator: premendolo
