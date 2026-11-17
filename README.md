@@ -4,7 +4,7 @@ Addon per [Nexus](https://raidcore.gg/Nexus) che traduce in italiano i testi di 
 attraverso l'addon [Text Translator](https://github.com/ideka/text-translator-public) di Ideka.
 
 > [!IMPORTANT]
-> **🇬🇧 CON GLI ALTRI GIOCATORI USA SEMPRE I NOMI IN INGLESE**
+> **⚠️ CON GLI ALTRI GIOCATORI USA SEMPRE I NOMI IN INGLESE**
 >
 > In chat, nelle richieste di aiuto, nelle discussioni, nelle segnalazioni e quando cerchi su wiki
 > o guide, **non usare i nomi tradotti**: la maggior parte dei giocatori, anche italiani, conosce
