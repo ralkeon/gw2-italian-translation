@@ -31,6 +31,10 @@ const WAIT: Duration = Duration::from_secs(60);
 pub struct Options {
     pub max_texts: usize,
     pub dry_run: bool,
+    /// Every text goes to the translators (or the agent): no name written at once, no copy of the
+    /// same English, the same English twice asked twice. For a translation made from scratch (the
+    /// agents' pilot: a database of its own, nothing it holds trusted).
+    pub all: bool,
     /// Translated by hand instead of by the translators (see `ByHand`).
     pub by_hand: Option<ByHand>,
 }
@@ -199,6 +203,14 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
         }
         if !ours.is_empty() {
             report.changed += 1;
+        }
+        if options.all {
+            match markup::prepare(&text.en) {
+                Some(prepared) if todo.len() < options.max_texts => todo.push((text, prepared)),
+                Some(_) => {}
+                None => report.nothing += 1,
+            }
+            continue;
         }
         if let Some(name) = english.whole(&text.en) {
             report.names += 1;

@@ -119,7 +119,7 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server review|plurals [--db gw2it.db] (--ask-to <file> | --answers <file>) [--max-texts 200] [--dry-run]
        gw2it-server import-glossary --file glossary_it.json [--excluded glossary-import-excluded.json] [--db gw2it.db] [--dry-run]
        gw2it-server repair [--db gw2it.db] [--dry-run]
-       gw2it-server bulk [--db gw2it.db] --file texts.jsonl (--translators translators.json | --ask-to <file> | --answers <file>) [--max-texts N] [--dry-run]
+       gw2it-server bulk [--db gw2it.db] --file texts.jsonl (--translators translators.json | --ask-to <file> | --answers <file>) [--max-texts N] [--all] [--dry-run]
        gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json | --ask-to <file> | --answers <file>] [--max-texts 2000] [--from-last] [--dry-run]
        gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]
        gw2it-server seeds --out seeds.db
@@ -146,6 +146,7 @@ fn main() {
     let include_manual = args.iter().any(|a| a == "--include-manual");
     let fetch = args.iter().any(|a| a == "--fetch");
     let from_last = args.iter().any(|a| a == "--from-last");
+    let all = args.iter().any(|a| a == "--all");
     args.retain(|a| a != "--dry-run" && a != "--include-manual" && a != "--fetch" && a != "--from-last");
     let mut options = HashMap::new();
     let mut args = args.into_iter();
@@ -288,7 +289,7 @@ fn main() {
             std::process::exit(2);
         };
         let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(usize::MAX);
-        run_bulk(&db, &file, translators_file.as_deref(), max_texts, dry_run, by_hand);
+        run_bulk(&db, &file, translators_file.as_deref(), max_texts, dry_run, all, by_hand);
         return;
     }
     if lt_sync {
@@ -585,7 +586,7 @@ fn run_import_glossary(db: &str, file: &str, excluded_file: Option<&str>, dry_ru
 }
 
 /// The texts of a file translated ahead (bulk.rs), with the language models first.
-fn run_bulk(db: &str, file: &str, translators_file: Option<&str>, max_texts: usize, dry_run: bool, by_hand: Option<bulk::ByHand>) {
+fn run_bulk(db: &str, file: &str, translators_file: Option<&str>, max_texts: usize, dry_run: bool, all: bool, by_hand: Option<bulk::ByHand>) {
     let con = open(db).unwrap_or_else(|e| {
         eprintln!("cannot open {db}: {e}");
         std::process::exit(1);
@@ -594,7 +595,7 @@ fn run_bulk(db: &str, file: &str, translators_file: Option<&str>, max_texts: usi
     if let Some(f) = translators_file {
         chain.set(bulk::order(translators(f)));
     }
-    match bulk::run(&con, &chain, file, &bulk::Options { max_texts, dry_run, by_hand }) {
+    match bulk::run(&con, &chain, file, &bulk::Options { max_texts, dry_run, all, by_hand }) {
         Ok(r) => println!(
             "bulk: {} texts, {} known, {} with new English, {} names, {} copied, {} with nothing to translate, {} translated, {} rejected{}{}",
             r.read,
