@@ -26,12 +26,12 @@ echo "=== $(date)" >> names.log
 echo "=== $(date)" >> plurals.log
 ./gw2it-server plurals --db data/gw2it.db --translators translators.json --max-texts 1500 >> plurals.log 2>&1
 ./gw2it-server replicate --db data/gw2it.db --to https://gw2it-sync.gw2it-sync.workers.dev --key-file replica.key >> replicate.log 2>&1
-sh ./export.sh
-# Last, apart: the copy of our translations adapted to the Local Translator's glossary (lt_sync.rs),
-# its own file, gw2it.db only read; the other jobs come first for the quota. The glossary's address
-# in lt-sync.url (not in the repository); without it, nothing.
+# The copy of our translations adapted to the Local Translator's glossary (lt_sync.rs): only its own
+# table, lt_sync; after the other jobs, which come first for the quota, and before the export, which
+# takes it into the download. The glossary's address in lt-sync.url (not in the repository); without
+# it, nothing.
 if [ -s lt-sync.url ]; then
     echo "=== $(date)" >> lt-sync.log
-    ./gw2it-server lt-sync --db data/gw2it.db --lt-db data/lt_sync.db --glossary "$(cat lt-sync.url)" --translators translators.json --max-texts 2000 >> lt-sync.log 2>&1
-    sh ./export-lt.sh
+    ./gw2it-server lt-sync --db data/gw2it.db --glossary "$(cat lt-sync.url)" --translators translators.json --max-texts 2000 >> lt-sync.log 2>&1
 fi
+sh ./export.sh

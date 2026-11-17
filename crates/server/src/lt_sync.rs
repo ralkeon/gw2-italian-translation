@@ -3,8 +3,9 @@
 //! `gw2it-server lt-sync --glossary <file or URL> [--db gw2it.db] [--lt-db lt_sync.db]
 //! [--translators translators.json] [--max-texts 2000] [--dry-run]`.
 //!
-//! Our translations are only read (gw2it.db opened read-only): the copy has its own file, table
-//! `lt_sync`, made into a download by deploy/export-lt.sh. For each row of ours, the first that applies:
+//! Our translations are only read: the copy is a table of its own in gw2it.db, `lt_sync`, and the job
+//! writes nothing else. export.sh takes it into the nightly download with the rest of the database:
+//! the owner of the glossary reads that table there. For each row of ours, the first that applies:
 //! - `exact`: the English is an `exact` entry of the imported glossary, also inside its markup
 //!   (`<c=@reminder>Junk</c>`): its Italian;
 //! - `term`: the English is one of its `terms`;
@@ -28,22 +29,23 @@ use std::{
 };
 
 use gw2it_text::markup;
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use ureq::Agent;
 
 use crate::{names, now_ms};
 
 pub const SCHEMA: &str = "
--- Our translations adapted to the imported glossary (lt_sync.rs). Its own file, not gw2it.db.
+-- Our translations adapted to the imported glossary (lt_sync.rs), for the glossary's owner: it follows
+-- that glossary, not our rules, and nothing of ours reads it.
 CREATE TABLE IF NOT EXISTS lt_sync (
     id      INTEGER NOT NULL,
     hash    TEXT    NOT NULL,
     en      TEXT    NOT NULL,
     it      TEXT    NOT NULL,
     source  TEXT    NOT NULL,  -- hybrid, exact, term, pattern, term-llm, pending, failed
-    from_it TEXT    NOT NULL,  -- our Italian it was made from
-    rule    TEXT    NOT NULL,  -- what the glossary says for the text ('' nothing): made again when it changes
+    ours    TEXT    NOT NULL,  -- XXH3-64 of our Italian it was made from: made again when ours changes
+    rule    TEXT    NOT NULL,  -- XXH3-64 of what the glossary says for the text: made again when it changes
     tries   INTEGER NOT NULL DEFAULT 0,
     at      INTEGER NOT NULL,  -- unix ms
     PRIMARY KEY (id, hash)
@@ -57,6 +59,8 @@ const TRIES_MAX: i64 = 3;
 /// Texts given to the model in a night, by default.
 pub const MAX_TEXTS: usize = 2000;
 const GLOSSARY_MAX: u64 = 64 << 20;
+/// Rows written in one transaction: the server's own writes wait at most a moment.
+const STEP: usize = 5000;
 /// How long the job waits in a row for busy language models before it stops.
 const PATIENCE: Duration = Duration::from_secs(2 * 3600);
 
@@ -378,7 +382,7 @@ pub struct Options {
 #[derive(Default, Debug)]
 pub struct Report {
     pub rows: usize,
-    /// Rows written again: new, or our Italian or the glossary changed.
+    /// Rows written again: new, or our Italian or what the glossary says changed.
     pub made: usize,
     /// Rows of the copy no longer among ours.
     pub removed: usize,
@@ -404,32 +408,39 @@ struct Row {
 /// A text for the model: its row, the terms to put in, the unusable answers so far.
 type Todo<'a> = (&'a Row, Vec<(String, String)>, i64);
 
-pub fn run(ours: &Connection, lt: &Connection, glossary: &Glossary, ask: Option<&names::Ask>, options: &Options) -> rusqlite::Result<Report> {
+/// The 16 hex digits of the XXH3-64 of `s`, as `translations.hash`.
+fn digest(s: &str) -> String {
+    format!("{:016x}", xxhash_rust::xxh3::xxh3_64(s.as_bytes()))
+}
+
+pub fn run(con: &Connection, glossary: &Glossary, ask: Option<&names::Ask>, options: &Options) -> rusqlite::Result<Report> {
     let mut report = Report::default();
     let rows: Vec<Row> = {
-        let mut stmt = ours.prepare("SELECT id, hash, en, it FROM translations ORDER BY id, hash")?;
+        let mut stmt = con.prepare("SELECT id, hash, en, it FROM translations ORDER BY id, hash")?;
         stmt.query_map([], |r| Ok(Row { id: r.get(0)?, hash: r.get(1)?, en: r.get(2)?, it: r.get(3)? }))?.collect::<rusqlite::Result<_>>()?
     };
     report.rows = rows.len();
-    // (id, hash) -> (from_it, rule, source, tries)
+    // (id, hash) -> (ours, rule, source, tries)
     let mut there: HashMap<(i64, String), (String, String, String, i64)> = {
-        let mut stmt = lt.prepare("SELECT id, hash, from_it, rule, source, tries FROM lt_sync")?;
+        let mut stmt = con.prepare("SELECT id, hash, ours, rule, source, tries FROM lt_sync")?;
         stmt.query_map([], |r| Ok(((r.get(0)?, r.get(1)?), (r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))))?
             .collect::<rusqlite::Result<_>>()?
     };
 
     let now = now_ms();
     let mut todo: Vec<Todo> = Vec::new();
-    let tx = lt.unchecked_transaction()?;
+    let mut written = 0;
+    con.execute_batch("BEGIN")?;
     for row in &rows {
         let plan = glossary.plan(&row.en, &row.it);
         let (source, it, rule) = match &plan {
-            Plan::Fixed(source, x) => (*source, x.as_str(), format!("{source}\t{x}")),
-            Plan::Ask(needs) => ("pending", row.it.as_str(), serde_json::to_string(needs).unwrap_or_default()),
-            Plan::Ours => ("hybrid", row.it.as_str(), String::new()),
+            Plan::Fixed(source, x) => (*source, x.as_str(), digest(&format!("{source}\t{x}"))),
+            Plan::Ask(needs) => ("pending", row.it.as_str(), digest(&serde_json::to_string(needs).unwrap_or_default())),
+            Plan::Ours => ("hybrid", row.it.as_str(), digest("")),
         };
-        if let Some((from_it, old_rule, old_source, tries)) = there.remove(&(row.id, row.hash.clone()))
-            && from_it == row.it
+        let ours = digest(&row.it);
+        if let Some((old_ours, old_rule, old_source, tries)) = there.remove(&(row.id, row.hash.clone()))
+            && old_ours == ours
             && old_rule == rule
         {
             if let (Plan::Ask(needs), "pending") = (plan, old_source.as_str()) {
@@ -439,11 +450,15 @@ pub fn run(ours: &Connection, lt: &Connection, glossary: &Glossary, ask: Option<
         }
         report.made += 1;
         if !options.dry_run {
-            tx.execute(
-                "INSERT OR REPLACE INTO lt_sync (id, hash, en, it, source, from_it, rule, tries, at)
+            con.prepare_cached(
+                "INSERT OR REPLACE INTO lt_sync (id, hash, en, it, source, ours, rule, tries, at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
-                params![row.id, row.hash, row.en, it, source, row.it, rule, now],
-            )?;
+            )?
+            .execute(params![row.id, row.hash, row.en, it, source, ours, rule, now])?;
+            written += 1;
+            if written % STEP == 0 {
+                con.execute_batch("COMMIT; BEGIN")?;
+            }
         }
         if let Plan::Ask(needs) = plan {
             todo.push((row, needs, 0));
@@ -452,10 +467,10 @@ pub fn run(ours: &Connection, lt: &Connection, glossary: &Glossary, ask: Option<
     for (id, hash) in there.keys() {
         report.removed += 1;
         if !options.dry_run {
-            tx.execute("DELETE FROM lt_sync WHERE id = ?1 AND hash = ?2", params![id, hash])?;
+            con.execute("DELETE FROM lt_sync WHERE id = ?1 AND hash = ?2", params![id, hash])?;
         }
     }
-    tx.commit()?;
+    con.execute_batch("COMMIT")?;
 
     // The model puts the glossary's terms in.
     report.waiting = todo.len();
@@ -516,15 +531,15 @@ pub fn run(ours: &Connection, lt: &Connection, glossary: &Glossary, ask: Option<
                     }
                 };
                 if !options.dry_run {
-                    lt.execute(
-                        "UPDATE lt_sync SET it = ?3, source = ?4, tries = ?5, at = ?6 WHERE id = ?1 AND hash = ?2 AND from_it = ?7",
-                        params![row.id, row.hash, it, source, tries, now_ms(), row.it],
+                    con.execute(
+                        "UPDATE lt_sync SET it = ?3, source = ?4, tries = ?5, at = ?6 WHERE id = ?1 AND hash = ?2 AND ours = ?7",
+                        params![row.id, row.hash, it, source, tries, now_ms(), digest(&row.it)],
                     )?;
                 }
             }
         }
     }
-    let mut stmt = lt.prepare("SELECT source, count(*) FROM lt_sync GROUP BY source ORDER BY source")?;
+    let mut stmt = con.prepare("SELECT source, count(*) FROM lt_sync GROUP BY source ORDER BY source")?;
     report.sources = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
     Ok(report)
 }
@@ -546,29 +561,18 @@ fn read_glossary(from: &str) -> Result<Value, String> {
 }
 
 /// `gw2it-server lt-sync`: see the top of this file.
-pub fn command(db: &str, lt_db: &str, from: &str, translators_file: Option<&str>, max_texts: usize, dry_run: bool) {
+pub fn command(db: &str, from: &str, translators_file: Option<&str>, max_texts: usize, dry_run: bool) {
     let fail = |what: String| -> ! {
         eprintln!("lt-sync: {what}");
         std::process::exit(1);
     };
     let glossary = read_glossary(from).and_then(|g| Glossary::from_json(&g)).unwrap_or_else(|e| fail(format!("glossary: {e}")));
-    // Ours only read: the job never writes to gw2it.db.
-    let ours = Connection::open_with_flags(db, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
-        .and_then(|c| c.busy_timeout(Duration::from_secs(30)).map(|_| c))
-        .unwrap_or_else(|e| fail(format!("cannot open {db}: {e}")));
-    let lt = Connection::open(lt_db)
-        .and_then(|c| {
-            c.busy_timeout(Duration::from_secs(5))?;
-            c.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
-            c.execute_batch(SCHEMA)?;
-            Ok(c)
-        })
-        .unwrap_or_else(|e| fail(format!("cannot open {lt_db}: {e}")));
+    let con = crate::open(db).and_then(|c| c.execute_batch(SCHEMA).map(|_| c)).unwrap_or_else(|e| fail(format!("cannot open {db}: {e}")));
     let mut chain = gw2it_translate::Chain::default();
     chain.set(translators_file.map(crate::translators).unwrap_or_default());
     let ask = |system: &str, user: &str| chain.ask_patiently(system, user, PATIENCE).map_err(|e| e.to_string());
     let ask: Option<&names::Ask> = if chain.is_empty() { None } else { Some(&ask) };
-    match run(&ours, &lt, &glossary, ask, &Options { dry_run, max_texts }) {
+    match run(&con, &glossary, ask, &Options { dry_run, max_texts }) {
         Ok(r) => println!(
             "lt-sync: {} rows, {} made again, {} removed; model: {} waiting, {} asked, {} rewritten, {} plain, {} failed; copy: {}{}{}",
             r.rows,
@@ -661,10 +665,11 @@ mod tests {
         assert!(!usable(en, old, "Incontrami subito all'%str1%Arco del Leone%str2%.", &[&w]));
     }
 
-    fn dbs() -> (Connection, Connection) {
-        let ours = Connection::open_in_memory().unwrap();
-        ours.execute_batch(include_str!("../../../server/schema.sql")).unwrap();
-        ours.execute_batch(
+    fn db() -> Connection {
+        let con = Connection::open_in_memory().unwrap();
+        con.execute_batch(include_str!("../../../server/schema.sql")).unwrap();
+        con.execute_batch(SCHEMA).unwrap();
+        con.execute_batch(
             "INSERT INTO translations (id, hash, en, it, status, author, at, seq, trust) VALUES
                (1, 'a', 'Junk', 'Spazzatura', 'auto', 'x', 0, 1, 1),
                (2, 'b', 'Meet me in Lion''s Arch.', 'Incontrami a Lion''s Arch.', 'auto', 'x', 0, 2, 1),
@@ -672,32 +677,30 @@ mod tests {
                (4, 'd', 'Pray to the raid god.', 'Prega il dio del raid.', 'auto', 'x', 0, 4, 1);",
         )
         .unwrap();
-        let lt = Connection::open_in_memory().unwrap();
-        lt.execute_batch(SCHEMA).unwrap();
-        (ours, lt)
+        con
     }
 
-    fn row(lt: &Connection, id: i64) -> (String, String, i64) {
-        lt.query_row("SELECT it, source, tries FROM lt_sync WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap()
+    fn row(con: &Connection, id: i64) -> (String, String, i64) {
+        con.query_row("SELECT it, source, tries FROM lt_sync WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap()
     }
 
     #[test]
     fn the_copy_follows_the_glossary_and_is_made_again_only_on_a_change() {
-        let (ours, lt) = dbs();
+        let con = db();
         let g = glossary();
         let options = Options { dry_run: false, max_texts: 10 };
         let ask = |_: &str, user: &str| -> Result<Value, String> {
             assert!(user.contains(r#""use":[{"en":"Lion's Arch","it":"Arco del Leone"}]"#), "{user}");
             Ok(json!({"texts": [{"n": 0, "it": "Incontrami all'Arco del Leone."}, {"n": 1, "it": "Prega il dio del raid."}]}))
         };
-        let r = run(&ours, &lt, &g, Some(&ask), &options).unwrap();
+        let r = run(&con, &g, Some(&ask), &options).unwrap();
         assert_eq!((r.rows, r.made, r.waiting, r.asked, r.rewritten, r.failed), (4, 4, 2, 2, 1, 1));
-        assert_eq!(row(&lt, 1), ("Ciarpame".into(), "exact".into(), 0));
-        assert_eq!(row(&lt, 2), ("Incontrami all'Arco del Leone.".into(), "term-llm".into(), 0));
-        assert_eq!(row(&lt, 3), ("Ciao.".into(), "hybrid".into(), 0));
-        assert_eq!(row(&lt, 4), ("Prega il dio del raid.".into(), "pending".into(), 1));
+        assert_eq!(row(&con, 1), ("Ciarpame".into(), "exact".into(), 0));
+        assert_eq!(row(&con, 2), ("Incontrami all'Arco del Leone.".into(), "term-llm".into(), 0));
+        assert_eq!(row(&con, 3), ("Ciao.".into(), "hybrid".into(), 0));
+        assert_eq!(row(&con, 4), ("Prega il dio del raid.".into(), "pending".into(), 1));
         // Ours untouched.
-        let it: String = ours.query_row("SELECT it FROM translations WHERE id = 1", [], |r| r.get(0)).unwrap();
+        let it: String = con.query_row("SELECT it FROM translations WHERE id = 1", [], |r| r.get(0)).unwrap();
         assert_eq!(it, "Spazzatura");
 
         // Again: only the pending text is asked; after three unusable answers it keeps ours.
@@ -705,38 +708,38 @@ mod tests {
             assert!(user.contains("raid god") && !user.contains("Lion"), "{user}");
             Ok(json!({"texts": []}))
         };
-        let r = run(&ours, &lt, &g, Some(&only_pending), &options).unwrap();
+        let r = run(&con, &g, Some(&only_pending), &options).unwrap();
         assert_eq!((r.made, r.asked, r.failed), (0, 1, 1));
-        run(&ours, &lt, &g, Some(&only_pending), &options).unwrap();
-        assert_eq!(row(&lt, 4), ("Prega il dio del raid.".into(), "failed".into(), 3));
+        run(&con, &g, Some(&only_pending), &options).unwrap();
+        assert_eq!(row(&con, 4), ("Prega il dio del raid.".into(), "failed".into(), 3));
         let never = |_: &str, user: &str| -> Result<Value, String> { panic!("asked again: {user}") };
-        let r = run(&ours, &lt, &g, Some(&never), &options).unwrap();
+        let r = run(&con, &g, Some(&never), &options).unwrap();
         assert_eq!((r.made, r.waiting), (0, 0));
 
         // Our Italian changed: made again; a row gone from ours: gone from the copy.
-        ours.execute_batch("UPDATE translations SET it = 'Ciao!' WHERE id = 3; DELETE FROM translations WHERE id = 1;").unwrap();
-        let r = run(&ours, &lt, &g, Some(&never), &options).unwrap();
+        con.execute_batch("UPDATE translations SET it = 'Ciao!' WHERE id = 3; DELETE FROM translations WHERE id = 1;").unwrap();
+        let r = run(&con, &g, Some(&never), &options).unwrap();
         assert_eq!((r.made, r.removed), (1, 1));
-        assert_eq!(row(&lt, 3).0, "Ciao!");
-        let left: i64 = lt.query_row("SELECT count(*) FROM lt_sync", [], |r| r.get(0)).unwrap();
+        assert_eq!(row(&con, 3).0, "Ciao!");
+        let left: i64 = con.query_row("SELECT count(*) FROM lt_sync", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 3);
     }
 
     #[test]
     fn plain_words_keep_ours_and_a_dry_run_writes_nothing() {
-        let (ours, lt) = dbs();
+        let con = db();
         let g = glossary();
-        let r = run(&ours, &lt, &g, None, &Options { dry_run: true, max_texts: 10 }).unwrap();
+        let r = run(&con, &g, None, &Options { dry_run: true, max_texts: 10 }).unwrap();
         assert_eq!((r.made, r.waiting), (4, 2));
-        let n: i64 = lt.query_row("SELECT count(*) FROM lt_sync", [], |r| r.get(0)).unwrap();
+        let n: i64 = con.query_row("SELECT count(*) FROM lt_sync", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);
         let plain = |_: &str, _: &str| -> Result<Value, String> {
             Ok(json!({"texts": [{"n": 0, "it": "Incontrami a Lion's Arch.", "plain": ["Lion's Arch"]}, {"n": 1, "plain": ["raid god"]}]}))
         };
-        let r = run(&ours, &lt, &g, Some(&plain), &Options { dry_run: false, max_texts: 1 }).unwrap();
+        let r = run(&con, &g, Some(&plain), &Options { dry_run: false, max_texts: 1 }).unwrap();
         // max_texts: one text this time.
         assert_eq!((r.asked, r.plain), (1, 1));
-        assert_eq!(row(&lt, 2), ("Incontrami a Lion's Arch.".into(), "hybrid".into(), 0));
-        assert_eq!(row(&lt, 4).1, "pending");
+        assert_eq!(row(&con, 2), ("Incontrami a Lion's Arch.".into(), "hybrid".into(), 0));
+        assert_eq!(row(&con, 4).1, "pending");
     }
 }
