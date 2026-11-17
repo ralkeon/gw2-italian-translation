@@ -31,6 +31,22 @@ const WAIT: Duration = Duration::from_secs(60);
 pub struct Options {
     pub max_texts: usize,
     pub dry_run: bool,
+    /// Translated by hand instead of by the translators (see `ByHand`).
+    pub by_hand: Option<ByHand>,
+}
+
+/// The translations given by hand (the translator agent, Claude Code on a subscription):
+/// `AskTo(file)`: the texts to translate go into the file, one JSON line each: {"id", "hash", "en",
+/// "src": the text as the translators get it (markup as <x id="N"/> tags), "terms": the glossary's
+/// [en, it] in it, "keep": the names in it that stay English}; nothing is written to the database.
+/// `Answers(file)`: the same lines with "answer": the Italian of "src", tags kept. Each answer goes
+/// through what a translator's answer goes through (markup put back and checked, the glossary's fix,
+/// the plural marks) and is written as `byhand`: above the review and the names job (priority.rs),
+/// which take a person's judgment as final; the agents may still correct it. A text with no answer
+/// stays for later.
+pub enum ByHand {
+    AskTo(String),
+    Answers(String),
 }
 
 #[derive(Default)]
@@ -136,12 +152,28 @@ fn spelled_plural(en: &str) -> String {
 
 /// Writes the rows `[id, hash, en, it]` as this server's machine translations.
 fn write(con: &Connection, rows: &[(&Text, String)], dry_run: bool) -> rusqlite::Result<()> {
+    write_as(con, rows, dry_run, "bulk")
+}
+
+fn write_as(con: &Connection, rows: &[(&Text, String)], dry_run: bool, author: &str) -> rusqlite::Result<()> {
     if rows.is_empty() || dry_run {
         return Ok(());
     }
-    let json = Value::Array(rows.iter().map(|(t, it)| json!([t.id, t.hash, t.en, it, "auto", "bulk", 1])).collect());
-    con.execute(SQL_UPSERT, params![json.to_string(), "bulk", now_ms(), 0])?;
+    let json = Value::Array(rows.iter().map(|(t, it)| json!([t.id, t.hash, t.en, it, "auto", author, 1])).collect());
+    con.execute(SQL_UPSERT, params![json.to_string(), author, now_ms(), 0])?;
     Ok(())
+}
+
+/// The answers by hand of `file`, by the hash of the English.
+fn read_answers(file: &str) -> Result<std::collections::HashMap<String, String>, String> {
+    let mut out = std::collections::HashMap::new();
+    for (n, line) in std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?.lines().enumerate().filter(|(_, l)| !l.trim().is_empty()) {
+        let v: Value = serde_json::from_str(line).map_err(|e| format!("{file}:{}: {e}", n + 1))?;
+        if let (Some(hash), Some(answer)) = (v["hash"].as_str(), v["answer"].as_str()) {
+            out.insert(hash.to_owned(), answer.to_owned());
+        }
+    }
+    Ok(out)
 }
 
 pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Result<Report, String> {
@@ -191,7 +223,8 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
             None => report.nothing += 1,
         }
     }
-    write(con, &quick, options.dry_run).map_err(db)?;
+    let asking = matches!(options.by_hand, Some(ByHand::AskTo(_)));
+    write(con, &quick, options.dry_run || asking).map_err(db)?;
     println!(
         "bulk: {} texts, {} known, {} with new English, {} names, {} copied, {} with nothing to translate, {} to translate",
         report.read,
@@ -202,6 +235,47 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
         report.nothing,
         todo.len()
     );
+
+    match &options.by_hand {
+        Some(ByHand::AskTo(file)) => {
+            use std::io::Write;
+            let mut out = std::fs::OpenOptions::new().create(true).append(true).open(file).map_err(|e| format!("{file}: {e}"))?;
+            for (text, prepared) in &todo {
+                let terms: Vec<[&str; 2]> = glossary::relevant(&terms, &[&text.en]).iter().map(|t| [t.en.as_str(), t.it.as_str()]).collect();
+                let keep: Vec<&str> = english.find(&text.en).iter().map(|&(a, b)| &text.en[a..b]).collect();
+                let line = json!({"id": text.id, "hash": text.hash, "en": text.en, "src": prepared.xml, "terms": terms, "keep": keep});
+                writeln!(out, "{line}").map_err(|e| format!("{file}: {e}"))?;
+            }
+            println!("bulk: {} texts to translate by hand written to {file}", todo.len());
+            return Ok(report);
+        }
+        Some(ByHand::Answers(file)) => {
+            let answers = read_answers(file)?;
+            let mut rows = Vec::new();
+            for (text, prepared) in &todo {
+                let Some(answer) = answers.get(&text.hash) else { continue };
+                match prepared.restore(answer).and_then(|it| markup::finish(&text.en, &it)) {
+                    Some(it) => {
+                        let it = glossary::fix(&text.en, &it, &terms);
+                        rows.push((*text, plural::pluralize(&text.en, &it)));
+                    }
+                    None => {
+                        eprintln!("bulk: {} rejected (markup changed): {:?} -> {:?}", text.id, text.en, answer);
+                        report.rejected += 1;
+                    }
+                }
+            }
+            report.translated = rows.len();
+            write_as(con, &rows, options.dry_run, crate::priority::BY_HAND).map_err(db)?;
+            if options.dry_run {
+                for (text, it) in &rows {
+                    println!("bulk: {} {:?} -> {:?}", text.id, text.en, it);
+                }
+            }
+            return Ok(report);
+        }
+        None => {}
+    }
 
     let mut waited = Duration::ZERO;
     let mut start = 0;

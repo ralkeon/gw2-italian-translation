@@ -46,8 +46,9 @@ Italian plural (\"i Sunspear\", \"gli Elder Dragon\", \"i Seraph\"). \"Fractal\"
 always stays in English, also in dialogue (\"il Fractal\", \"i Fractal\", \"Fractal di livello 40\"). \
 Runes and sigils by name stay whole in English, with or without Superior, Major or Minor (\"Rune of the \
 Daredevil\", \"Sigil of Exposure\"), and so does Agony in item names (\"Infusione di Agony +5\"). The name \
-of a skin or armor set stays in English after the Italian noun (\"Ascia Painter's Brilliance\", \"Aspetto \
-per spada Royal Flame\", \"Fucile dei Lightborne\"); \"Slumbering\" in an item name is \"sopito\" (\"Spada \
+of a skin or armor set stays in English after the Italian noun (\"Ascia Painter's Brilliance\", \"Skin \
+per spada Royal Flame\", \"Fucile dei Lightborne\"); a cosmetic skin is \"skin\" (feminine, invariable: \
+\"la skin\", \"le skin\"), never \"aspetto\"; \"Slumbering\" in an item name is \"sopito\" (\"Spada \
 d'ossidiana sopita\").
 - The words of the game's mechanics stay in English, as Italian players say them: the names of \
 skills, traits, specializations, professions and mounts; the skill types and labels (Glamour, \
@@ -65,6 +66,10 @@ also the minor ones: Malign, Vital, Healing, Strong) stays English and goes afte
 (\"Mini Siamese Cat\" is \"Mini Gatto siamese\", \"Mini Raven\" is \"Mini Corvo\"). The adjectives \
 of a crafting component describe the piece, not its material (\"Oiled Orichalcum Hammer Head\" is \
 \"Testa di martello in oricalco oliata\").
+- Capitals follow the English: a name or label written in Title Case keeps it in Italian, every \
+full word capitalised and articles, prepositions and conjunctions lowercase (\"Storm Bolt\" is \
+\"Dardo di Tempesta\", \"Rawhide Boot Sole\" is \"Suola di Stivali in Cuoio Grezzo\"); a sentence is \
+written as Italian writes it.
 - Translate the same term the same way across the texts.
 ";
 
