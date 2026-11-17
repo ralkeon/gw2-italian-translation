@@ -19,6 +19,8 @@
 //!                                                                         (see bulk.rs)
 //! gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json | --ask-to <file> | --answers <file>]
 //!              [--max-texts 2000] [--from-last] [--dry-run]               (see lt_sync.rs)
+//! gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]
+//!                                                                         (see gw2dat.rs)
 
 use std::{
     collections::HashMap,
@@ -38,6 +40,7 @@ use tiny_http::{Header, Method, Request, Response, Server};
 mod bulk;
 mod consistency;
 mod glossary;
+mod gw2dat;
 mod names;
 mod glossary_import;
 mod lt_sync;
@@ -112,7 +115,8 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server import-glossary --file glossary_it.json [--excluded glossary-import-excluded.json] [--db gw2it.db] [--dry-run]
        gw2it-server repair [--db gw2it.db] [--dry-run]
        gw2it-server bulk [--db gw2it.db] --file texts.jsonl --translators translators.json [--max-texts N] [--dry-run]
-       gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json | --ask-to <file> | --answers <file>] [--max-texts 2000] [--from-last] [--dry-run]";
+       gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json | --ask-to <file> | --answers <file>] [--max-texts 2000] [--from-last] [--dry-run]
+       gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -125,7 +129,8 @@ fn main() {
     let repair = args.first().is_some_and(|a| a == "repair");
     let bulk = args.first().is_some_and(|a| a == "bulk");
     let lt_sync = args.first().is_some_and(|a| a == "lt-sync");
-    if replicate || consistency || english_names || review || plurals || import || repair || bulk || lt_sync {
+    let gw2dat = args.first().is_some_and(|a| a == "gw2dat");
+    if replicate || consistency || english_names || review || plurals || import || repair || bulk || lt_sync || gw2dat {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -137,7 +142,7 @@ fn main() {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts" | "--review-daily" | "--file" | "--excluded" | "--ask-to" | "--answers" | "--glossary"), Some(v)) => {
+            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts" | "--review-daily" | "--file" | "--excluded" | "--ask-to" | "--answers" | "--glossary" | "--dat" | "--seeds" | "--out"), Some(v)) => {
                 options.insert(name.to_owned(), v);
             }
             _ => {
@@ -148,6 +153,25 @@ fn main() {
     }
     let db = options.remove("--db").unwrap_or_else(|| "gw2it.db".into());
 
+    if gw2dat {
+        let (Some(dat), Some(seeds), Some(out)) = (options.remove("--dat"), options.remove("--seeds"), options.remove("--out")) else {
+            eprintln!("{USAGE}");
+            std::process::exit(2);
+        };
+        let db = std::path::Path::new(&db).exists().then_some(db);
+        match gw2dat::run(&dat, &seeds, &out, db.as_deref(), options.remove("--file").as_deref()) {
+            Ok(r) => println!(
+                "gw2dat: {} entries ({} read again), {} English files, {} placed in a block; texts: {} plain, {} opened with a seed, \
+                 {} encrypted without a seed, {} seeds that do not fit, {} empty",
+                r.scanned, r.rescanned, r.english_files, r.with_block, r.plain, r.seeded, r.no_seed, r.bad_seed, r.empty
+            ),
+            Err(e) => {
+                eprintln!("gw2dat: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     if replicate {
         let (Some(to), Some(key_file)) = (options.remove("--to"), options.remove("--key-file")) else {
             eprintln!("{USAGE}");
