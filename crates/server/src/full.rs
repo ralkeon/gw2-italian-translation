@@ -197,13 +197,19 @@ struct Todo {
     swap: Vec<(String, String, String)>,
 }
 
-/// An answer by hand that can go into `full`: markup and plural marks as in the hybrid text, and none
-/// of the English words left (the ones the hybrid keeps in English in both variants are no swap).
-pub fn usable(hybrid: &str, answer: &str, swap: &[(String, String, String)]) -> bool {
+/// An answer by hand that can go into `full`: the markup as in the hybrid text; plural marks when the
+/// hybrid has some, and new ones only when the English has some (how many is the Italian's business:
+/// "Skin[s]" is "Skin" in the hybrid, invariable, but "Aspetto[pl:\"Aspetti\"]" here; "Città" needs
+/// none); every `[pl:"` closed; none of the English words left (the ones the hybrid keeps in English in
+/// both variants are no swap).
+pub fn usable(en: &str, hybrid: &str, answer: &str, swap: &[(String, String, String)]) -> bool {
+    let plural = |s: &str| s.contains("[s]") || s.contains("[pl:");
+    let closed = answer.split("[pl:").skip(1).all(|rest| rest.starts_with('"') && rest[1..].contains("\"]"));
     !answer.trim().is_empty()
         && tokens(hybrid) == tokens(answer)
-        && hybrid.matches("[pl:").count() == answer.matches("[pl:").count()
-        && hybrid.matches("[s]").count() == answer.matches("[s]").count()
+        && closed
+        && (!plural(hybrid) || plural(answer))
+        && (!plural(answer) || plural(en) || plural(hybrid))
         && swap.iter().all(|(en, it, _)| !kept(answer, en) || kept(it, en))
 }
 
@@ -254,6 +260,16 @@ pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Res
         stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).map_err(db)?.collect::<rusqlite::Result<_>>().map_err(db)?
     };
     report.rows = rows.len();
+    // The agent's answers: also for rows already made (a fix of its own sent a round later).
+    let mut answers: HashMap<(i64, String), String> = HashMap::new();
+    if let Some(ByHand::Answers(file)) = &options.by_hand {
+        for line in std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?.lines().filter(|l| !l.trim().is_empty()) {
+            let v: Value = serde_json::from_str(line).map_err(|e| format!("{file}: {e}: {line}"))?;
+            if let (Some(id), Some(hash), Some(answer)) = (v["id"].as_i64(), v["hash"].as_str(), v["answer"].as_str()) {
+                answers.insert((id, hash.to_owned()), answer.to_owned());
+            }
+        }
+    }
     let mut names_out: Vec<(i64, String, String, String)> = Vec::new();
     let mut drop: Vec<(i64, String)> = Vec::new();
     let mut todo: Vec<Todo> = Vec::new();
@@ -262,13 +278,17 @@ pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Res
         let key = (id, hash.clone());
         alive.insert(key.clone());
         let base = digest(&it);
+        let answered = answers.contains_key(&key);
         if let Some((old_base, _)) = made.get(&key) {
             if *old_base == base {
-                report.kept += 1;
-                continue;
+                if !answered {
+                    report.kept += 1;
+                    continue;
+                }
+            } else {
+                report.stale += 1;
+                drop.push(key.clone());
             }
-            report.stale += 1;
-            drop.push(key.clone());
         }
         let b = bare(&en);
         if let Some((full_it, _)) = by_en.get(b.as_str())
@@ -294,7 +314,7 @@ pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Res
                 }
             }
         }
-        if swap.is_empty() && !options.all {
+        if swap.is_empty() && !options.all && !answered {
             report.same += 1;
             continue;
         }
@@ -352,18 +372,11 @@ pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Res
                 report.asked += 1;
             }
         }
-        Some(ByHand::Answers(file)) => {
-            let mut answers: HashMap<(i64, String), String> = HashMap::new();
-            for line in std::fs::read_to_string(file).map_err(|e| format!("{file}: {e}"))?.lines().filter(|l| !l.trim().is_empty()) {
-                let v: Value = serde_json::from_str(line).map_err(|e| format!("{file}: {e}: {line}"))?;
-                if let (Some(id), Some(hash), Some(answer)) = (v["id"].as_i64(), v["hash"].as_str(), v["answer"].as_str()) {
-                    answers.insert((id, hash.to_owned()), answer.to_owned());
-                }
-            }
+        Some(ByHand::Answers(_)) => {
             let mut rows = Vec::new();
             for t in &todo {
                 let Some(answer) = answers.get(&(t.id, t.hash.clone())) else { continue };
-                if usable(&t.it, answer, &t.swap) {
+                if usable(&t.en, &t.it, answer, &t.swap) {
                     rows.push((t.id, t.hash.clone(), answer.clone(), digest(&t.it)));
                 } else {
                     report.refused += 1;
@@ -396,11 +409,31 @@ mod tests {
     #[test]
     fn markup_and_plural_marks_must_stay() {
         let swap = vec![("Might".to_owned(), "Forza".to_owned(), "boon".to_owned())];
+        let en = "Grant %str1% might to all[y|ies].";
         let hybrid = "Conferisci %str1% Might agli alleati[s].";
-        assert!(usable(hybrid, "Conferisci %str1% Forza agli alleati[s].", &swap));
-        assert!(!usable(hybrid, "Conferisci Forza agli alleati[s].", &swap));
-        assert!(!usable(hybrid, "Conferisci %str1% Might agli alleati[s].", &swap));
-        assert!(!usable(hybrid, "Conferisci %str1% Forza agli alleati.", &swap));
+        assert!(usable(en, hybrid, "Conferisci %str1% Forza agli alleati[s].", &swap));
+        assert!(!usable(en, hybrid, "Conferisci Forza agli alleati[s].", &swap));
+        assert!(!usable(en, hybrid, "Conferisci %str1% Might agli alleati[s].", &swap));
+        assert!(!usable(en, hybrid, "Conferisci %str1% Forza agli alleati.", &swap));
+    }
+
+    #[test]
+    fn plural_marks_follow_the_english() {
+        let swap = vec![("Skin".to_owned(), "Aspetto".to_owned(), "item".to_owned())];
+        let en = "Kaiser Snake Shield Skin[s]";
+        // "Skin" is invariable in the hybrid, "Aspetto" is not: the full variant adds its own mark.
+        let hybrid = "Skin per Scudo del Serpente Kaiser";
+        assert!(usable(en, hybrid, "Aspetto[pl:\"Aspetti\"] per Scudo del Serpente Kaiser", &swap));
+        // An invariable Italian word needs none.
+        assert!(usable("City[s] of Light", "City of Light", "Città della Luce", &[]));
+        // Noun and adjective: two marks for one English mark.
+        assert!(usable("Large Bone[s]", "Osso grande", "Osso[pl:\"Ossa\"] grande[pl:\"grandi\"]", &[]));
+        // A mark of the hybrid is not dropped.
+        assert!(!usable("Large Bone[s]", "Osso[pl:\"Ossa\"] grande", "Osso grande", &[]));
+        // No plural in the English: no mark.
+        assert!(!usable("Kaiser Snake Shield Skin", "Skin per Scudo", "Aspetto[pl:\"Aspetti\"] per Scudo", &swap));
+        // A mark left open.
+        assert!(!usable(en, hybrid, "Aspetto[pl:\"Aspetti per Scudo del Serpente Kaiser", &swap));
     }
 
     #[test]
@@ -440,6 +473,12 @@ mod tests {
         std::fs::write(&answers, "{\"id\":2,\"hash\":\"b\",\"answer\":\"Conferisci Forza agli alleati.\"}\n").unwrap();
         let r = run(&con, n, t, &opts(ByHand::Answers(answers.to_str().unwrap().into()))).unwrap();
         assert_eq!((r.written, r.kept), (1, 1));
+        // A fix of its own a round later: the row already made is written again.
+        std::fs::write(&answers, "{\"id\":2,\"hash\":\"b\",\"answer\":\"Conferisci Forza a tutti gli alleati.\"}\n").unwrap();
+        let r = run(&con, n, t, &opts(ByHand::Answers(answers.to_str().unwrap().into()))).unwrap();
+        assert_eq!((r.written, r.kept, r.stale), (1, 1, 0));
+        let it: String = con.query_row("SELECT it FROM full WHERE id = 2", [], |r| r.get(0)).unwrap();
+        assert_eq!(it, "Conferisci Forza a tutti gli alleati.");
         // The hybrid row changes: the full row is dropped and asked again.
         con.execute("UPDATE translations SET it = 'Conferisci Might a tutti gli alleati.' WHERE id = 2", []).unwrap();
         let r = run(&con, n, t, &Options { max_texts: 10, dry_run: false, all: false, by_hand: None }).unwrap();
