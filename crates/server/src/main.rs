@@ -123,7 +123,7 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
        gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json | --ask-to <file> | --answers <file>] [--max-texts 2000] [--from-last] [--dry-run]
        gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]
        gw2it-server seeds --out seeds.db
-       gw2it-server full --names names_it.toml --terms terms.toml [--ask-to <file> | --answers <file>] [--max-texts 200] [--dry-run]";
+       gw2it-server full --names names_it.toml --terms terms.toml [--ask-to <file> | --answers <file>] [--max-texts 200] [--all] [--dry-run]";
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -178,7 +178,7 @@ fn main() {
             eprintln!("cannot open {db}: {e}");
             std::process::exit(1);
         });
-        match full::run(&con, &names, &terms, &full::Options { max_texts, dry_run, by_hand }) {
+        match full::run(&con, &names, &terms, &full::Options { max_texts, dry_run, all, by_hand }) {
             Ok(r) => println!(
                 "full: {} words, {} rows: {} as in the hybrid, {} made already, {} stale, {} names written, {} to rewrite, {} asked, {} written, {} refused{}",
                 r.words, r.rows, r.same, r.kept, r.stale, r.names, r.to_rewrite, r.asked, r.written, r.refused,

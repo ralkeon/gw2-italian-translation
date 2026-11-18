@@ -53,6 +53,11 @@ pub enum ByHand {
 pub struct Options {
     pub max_texts: usize,
     pub dry_run: bool,
+    /// Every row to the agent, also those without a listed word: the hybrid keeps in English
+    /// places, titles and epithets the lists do not have yet ("Cathedral of Zephyrs", "Laranthir of
+    /// the Wild"), which the all-Italian variant translates too. The agent decides each one with
+    /// the game's fr/es/de (the agents' pilot).
+    pub all: bool,
     pub by_hand: Option<ByHand>,
 }
 
@@ -289,7 +294,7 @@ pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Res
                 }
             }
         }
-        if swap.is_empty() {
+        if swap.is_empty() && !options.all {
             report.same += 1;
             continue;
         }
@@ -335,7 +340,8 @@ pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Res
         Some(ByHand::AskTo(file)) => {
             use std::io::Write;
             let mut out = std::fs::OpenOptions::new().create(true).append(true).open(file).map_err(|e| format!("{file}: {e}"))?;
-            let refs = crate::refs::Refs::open(con.path(), false);
+            // The game's fr/es/de too with --all: they show which English names are translated.
+            let refs = crate::refs::Refs::open(con.path(), options.all);
             for t in todo.iter().take(options.max_texts) {
                 let swap: Vec<[&str; 3]> = t.swap.iter().map(|(e, i, k)| [e.as_str(), i.as_str(), k.as_str()]).collect();
                 let mut line = json!({"id": t.id, "hash": t.hash, "en": t.en, "it": t.it, "swap": swap});
@@ -424,7 +430,7 @@ mod tests {
         let (n, t) = (names.to_str().unwrap(), terms.to_str().unwrap());
         let ask = dir.join("ask.jsonl");
         let _ = std::fs::remove_file(&ask);
-        let opts = |b| Options { max_texts: 10, dry_run: false, by_hand: Some(b) };
+        let opts = |b| Options { max_texts: 10, dry_run: false, all: false, by_hand: Some(b) };
         let r = run(&con, n, t, &opts(ByHand::AskTo(ask.to_str().unwrap().into()))).unwrap();
         assert_eq!((r.names, r.to_rewrite, r.same, r.asked), (1, 1, 1, 1));
         let it: String = con.query_row("SELECT it FROM full WHERE id = 1", [], |r| r.get(0)).unwrap();
@@ -436,7 +442,7 @@ mod tests {
         assert_eq!((r.written, r.kept), (1, 1));
         // The hybrid row changes: the full row is dropped and asked again.
         con.execute("UPDATE translations SET it = 'Conferisci Might a tutti gli alleati.' WHERE id = 2", []).unwrap();
-        let r = run(&con, n, t, &Options { max_texts: 10, dry_run: false, by_hand: None }).unwrap();
+        let r = run(&con, n, t, &Options { max_texts: 10, dry_run: false, all: false, by_hand: None }).unwrap();
         assert_eq!((r.stale, r.to_rewrite), (1, 1));
         // Emptied, not deleted: the addons take it out; it goes to them by /sync after the name row.
         let (it, source): (String, String) = con.query_row("SELECT it, source FROM full WHERE id = 2", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
@@ -446,7 +452,7 @@ mod tests {
         assert_eq!(rows.last().unwrap()[2], "");
         assert_eq!(pull(&con, seq, 10).unwrap().0.len(), 0);
         // Taken out once only: the next run does not count it again.
-        assert_eq!(run(&con, n, t, &Options { max_texts: 10, dry_run: false, by_hand: None }).unwrap().stale, 0);
+        assert_eq!(run(&con, n, t, &Options { max_texts: 10, dry_run: false, all: false, by_hand: None }).unwrap().stale, 0);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
