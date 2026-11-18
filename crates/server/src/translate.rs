@@ -47,7 +47,7 @@ fn today() -> i64 {
 }
 
 pub fn handle(app: &App, request: &mut Request) -> Result<Value, HttpError> {
-    if app.translators.is_empty() {
+    if app.translators.is_empty() || app.frozen {
         return Err(HttpError(503, "no translations on this server"));
     }
     let token_hash = user(app, request)?.token_hash;

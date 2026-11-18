@@ -6,6 +6,8 @@
 //! gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
 //!              [--translators translators.json]   (see translate.rs)
 //!              [--review-daily 3000]   (texts the background review gives the model per day; 0: off)
+//!              [--frozen]   (the database as it is: /sync gives everything but takes no rows or terms,
+//!                            no /translate, no background review; also when the file <db>.frozen exists)
 //! gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>   (see replicate.rs)
 //! gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
 //!                                                                         (see consistency.rs)
@@ -94,6 +96,9 @@ struct App {
     rate: Mutex<HashMap<String, (Instant, u32)>>,
     /// The names that stay in English (names.rs), and when they were read.
     names: Mutex<Option<(Instant, Arc<Names>)>>,
+    /// --frozen: /sync serves the database as it is and writes nothing the addons send (2026-11-18:
+    /// the agents retranslate everything into a new database; the old one stays as it was until then).
+    frozen: bool,
 }
 
 /// How long the names read from the database are used before reading them again (the nightly
@@ -110,7 +115,7 @@ impl From<rusqlite::Error> for HttpError {
 }
 
 const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
-                    [--translators translators.json]
+                    [--translators translators.json] [--frozen]
        gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>
        gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
        gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts N] [--dry-run]
@@ -147,7 +152,8 @@ fn main() {
     let fetch = args.iter().any(|a| a == "--fetch");
     let from_last = args.iter().any(|a| a == "--from-last");
     let all = args.iter().any(|a| a == "--all");
-    args.retain(|a| a != "--dry-run" && a != "--include-manual" && a != "--fetch" && a != "--from-last" && a != "--all");
+    let frozen = args.iter().any(|a| a == "--frozen");
+    args.retain(|a| a != "--dry-run" && a != "--include-manual" && a != "--fetch" && a != "--from-last" && a != "--all" && a != "--frozen");
     let mut options = HashMap::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -346,7 +352,12 @@ fn main() {
         eprintln!("cannot read the signing secret: {e}");
         std::process::exit(1);
     });
-    let app = Arc::new(App { db: Mutex::new(con), translators, secret, rate: Mutex::new(HashMap::new()), names: Mutex::new(None) });
+    // Also a file <db>.frozen next to the database: the service's command line needs root to change.
+    let frozen = frozen || std::path::Path::new(&format!("{db}.frozen")).exists();
+    if frozen {
+        eprintln!("gw2it-server: frozen, the rows and terms the addons send are not written, no /translate");
+    }
+    let app = Arc::new(App { db: Mutex::new(con), translators, secret, rate: Mutex::new(HashMap::new()), names: Mutex::new(None), frozen });
     let workers: Vec<_> = (0..THREADS)
         .map(|_| {
             let (server, app) = (server.clone(), app.clone());
@@ -357,7 +368,7 @@ fn main() {
             })
         })
         .collect();
-    if review_daily > 0 && !reviewers.is_empty() {
+    if review_daily > 0 && !reviewers.is_empty() && !app.frozen {
         let app = app.clone();
         thread::spawn(move || review_in_background(&app, &reviewers, review_daily));
     }
@@ -900,6 +911,7 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
 
     let since = input["since"].as_i64().filter(|&s| s > 0).unwrap_or(0);
     let sent = input["rows"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let sent = if app.frozen { &[][..] } else { sent };
     if sent.len() > PUSH_MAX {
         return Err(HttpError(413, "too many rows"));
     }
@@ -974,7 +986,7 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
     if sent_terms.len() > glossary::PUSH_MAX {
         return Err(HttpError(413, "too many terms"));
     }
-    if level >= 1 {
+    if level >= 1 && !app.frozen {
         let trust = if level >= 2 { 3 } else { 2 };
         let now = now_ms();
         let tx = db.transaction()?;
