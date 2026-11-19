@@ -62,6 +62,8 @@ Al primo avvio l'addon installa da solo il suo modulo in Text Translator e lo sc
 attivo. Dopo qualche secondo, il tempo di collegarsi al server, i testi compaiono in italiano.
 
 Se i testi restano in inglese:
+- guarda in fondo alle opzioni di **Italian Translation** in Nexus: **Text Translator** e
+  **Server** devono essere verdi; se una delle due righe non lo è, lì trovi il motivo;
 - riavvia il gioco una volta (o scegli **Italian Translation** tra i moduli di Text Translator);
 - nelle opzioni di Text Translator controlla che **Show Translated Text** sia attivo e
   **Pause Refreshes** spento: con i refresh in pausa le nuove traduzioni si applicano solo con un
@@ -74,7 +76,7 @@ L'addon si collega al server del progetto, dove vengono tradotti i testi del gio
 traduzioni dei testi che incontri. Un testo non ancora tradotto resta in inglese finché la sua
 traduzione non arriva; quando arriva compare da sola, senza riavviare.
 
-### Ibrida o tutto in italiano
+## Ibrida o tutto in italiano
 
 La traduzione può essere ibrida o completamente in italiano. Per attivare la versione tutta in
 italiano: Nexus → opzioni di **Italian Translation** → casella **Tutto in italiano**.
@@ -87,8 +89,6 @@ italiano: Nexus → opzioni di **Italian Translation** → casella **Tutto in it
   nell'ibrida.
 
 Il cambio vale subito, senza riavviare.
-
-Impostazioni e traduzioni stanno in `Guild Wars 2/addons/italian_translation/`.
 
 ## Stato del progetto
 
