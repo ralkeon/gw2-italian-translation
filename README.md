@@ -3,6 +3,8 @@
 Addon per [Nexus](https://raidcore.gg/Nexus) che traduce in italiano i testi di Guild Wars 2,
 attraverso l'addon [Text Translator](https://github.com/ideka/text-translator-public) di Ideka.
 
+[![Supportami su Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/P6V52AYPG7)
+
 > [!IMPORTANT]
 > **⚠️ CON GLI ALTRI GIOCATORI USA SEMPRE I NOMI IN INGLESE**
 >
@@ -93,6 +95,9 @@ Il cambio vale subito, senza riavviare.
 Italian Translation è un progetto che porto avanti nel tempo libero. Proverò a tenerlo aggiornato
 e a sistemare i problemi che mi segnalate, ma a volte ci vorrà un po' di tempo prima di una
 risposta o di una nuova versione: grazie per la pazienza!
+
+Se l'addon ti piace e vuoi darmi una mano a tenerlo in piedi, puoi offrirmi un caffè su
+[Ko-fi](https://ko-fi.com/P6V52AYPG7).
 
 ## Licenza
 

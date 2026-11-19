@@ -3,12 +3,16 @@
 
 use std::sync::atomic::Ordering;
 
-use nexus::imgui::Ui;
+use nexus::imgui::{StyleColor, Ui};
 
 use crate::{config, install, state::SHARED, store};
 
 const GREEN: [f32; 4] = [0.4, 0.9, 0.4, 1.0];
 const ORANGE: [f32; 4] = [0.95, 0.75, 0.3, 1.0];
+/// Ko-fi's button colour (#8B40B9) and the page for tips.
+const KOFI: [f32; 4] = [0.545, 0.251, 0.725, 1.0];
+const KOFI_HOVER: [f32; 4] = [0.62, 0.33, 0.8, 1.0];
+const KOFI_URL: &str = "https://ko-fi.com/P6V52AYPG7";
 
 pub fn render(ui: &Ui) {
     ui.text_disabled(concat!("Italian Translation v", env!("CARGO_PKG_VERSION")));
@@ -40,6 +44,35 @@ pub fn render(ui: &Ui) {
     ui.text_disabled(format!("Testi tutti in italiano già pronti: {}", store::full_count()));
     ui.separator();
     status(ui);
+    ui.separator();
+    tips(ui);
+}
+
+/// A button to the project's Ko-fi page, opened in the default browser.
+fn tips(ui: &Ui) {
+    let clicked = {
+        let _button = ui.push_style_color(StyleColor::Button, KOFI);
+        let _hovered = ui.push_style_color(StyleColor::ButtonHovered, KOFI_HOVER);
+        let _active = ui.push_style_color(StyleColor::ButtonActive, KOFI);
+        ui.button("Supportami su Ko-fi")
+    };
+    ui.same_line();
+    ui.text_disabled("Se l'addon ti piace, puoi offrirmi un caffè.");
+    if clicked {
+        // Off the render thread: ShellExecute may take a moment to start the browser.
+        std::thread::spawn(|| open_url(KOFI_URL));
+    }
+}
+
+fn open_url(url: &str) {
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+    let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
+    let (verb, url) = (wide("open"), wide(url));
+    // SAFETY: both strings are NUL-terminated UTF-16 and outlive the call; the other pointers may be null.
+    let code = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), url.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+    if code as usize <= 32 {
+        log::warn!("cannot open {KOFI_URL} (ShellExecute {})", code as usize);
+    }
 }
 
 fn status(ui: &Ui) {
