@@ -96,7 +96,9 @@ pub fn words(names: &str, terms: &str) -> Result<Vec<(String, String, String)>, 
             }
             let kind = entry.get("kind").and_then(|v| v.as_str()).unwrap_or(key);
             // The full variant keeps the English word too ("Mithril" = "di Mithril"): nothing to swap.
-            if en.chars().count() < 3 || en == it || has_word(it, en) || !seen.insert(en.to_owned()) {
+            // One English may have an entry per kind ("Seraph": stat prefix "da Serafino", organization "Serafini"):
+            // the agent gets both with their kind and uses the one the sentence means.
+            if en.chars().count() < 3 || en == it || has_word(it, en) || !seen.insert((en.to_owned(), kind.to_owned())) {
                 continue;
             }
             out.push((en.to_owned(), it.to_owned(), kind.to_owned()));
@@ -235,11 +237,18 @@ pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Res
         let tx = con.unchecked_transaction().map_err(db)?;
         tx.execute("DELETE FROM full_terms", []).map_err(db)?;
         for (en, it, kind) in &list {
-            tx.execute("INSERT INTO full_terms (en, it, kind) VALUES (?1, ?2, ?3)", params![en, it, kind]).map_err(db)?;
+            tx.execute("INSERT OR IGNORE INTO full_terms (en, it, kind) VALUES (?1, ?2, ?3)", params![en, it, kind]).map_err(db)?;
         }
         tx.commit().map_err(db)?;
     }
-    let by_en: HashMap<&str, (&str, &str)> = list.iter().map(|(e, i, k)| (e.as_str(), (i.as_str(), k.as_str()))).collect();
+    // A whole text that is a listed word is written without the agent, unless the word has two kinds (the agent
+    // picks the sense: "Seraph" alone may be the stat label "Serafino" or the organization).
+    let mut kinds: HashMap<&str, usize> = HashMap::new();
+    for (e, _, _) in &list {
+        *kinds.entry(e.as_str()).or_default() += 1;
+    }
+    let by_en: HashMap<&str, (&str, &str)> =
+        list.iter().filter(|(e, _, _)| kinds[e.as_str()] == 1).map(|(e, i, k)| (e.as_str(), (i.as_str(), k.as_str()))).collect();
     // Candidates by first word, longest first: a text is looked up only for the words it has.
     let mut by_first: HashMap<String, Vec<&(String, String, String)>> = HashMap::new();
     for w in &list {
@@ -309,7 +318,8 @@ pub fn run(con: &Connection, names: &str, terms: &str, options: &Options) -> Res
             }
             for cand in by_first.get(w).into_iter().flatten() {
                 // The English may write it in lowercase ("grant might"): the hybrid kept it, so it is the term.
-                if has_word(&lower, &cand.0.to_lowercase()) && kept(&it, &cand.0) && !swap.iter().any(|s| s.0.contains(cand.0.as_str())) {
+                // A longer term already taken covers this one; the same English of another kind is added too.
+                if has_word(&lower, &cand.0.to_lowercase()) && kept(&it, &cand.0) && !swap.iter().any(|s| s.0 != cand.0 && s.0.contains(cand.0.as_str())) {
                     swap.push((*cand).clone());
                 }
             }
@@ -434,6 +444,25 @@ mod tests {
         assert!(!usable("Kaiser Snake Shield Skin", "Skin per Scudo", "Aspetto[pl:\"Aspetti\"] per Scudo", &swap));
         // A mark left open.
         assert!(!usable(en, hybrid, "Aspetto[pl:\"Aspetti per Scudo del Serpente Kaiser", &swap));
+    }
+
+    #[test]
+    fn one_english_two_kinds() {
+        let dir = std::env::temp_dir().join(format!("gw2it-full-kinds-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (names, terms) = (dir.join("names.toml"), dir.join("terms.toml"));
+        std::fs::write(&names, "").unwrap();
+        std::fs::write(
+            &terms,
+            "[[term]]\nen = \"Seraph\"\nkind = \"stat_prefix\"\nit = \"da Serafino\"\nstatus = \"approved\"\n\
+             [[term]]\nen = \"Seraph\"\nkind = \"organization\"\nit = \"Serafini\"\nstatus = \"approved\"\n\
+             [[term]]\nen = \"Seraph\"\nkind = \"organization\"\nit = \"Altro\"\nstatus = \"approved\"\n",
+        )
+        .unwrap();
+        let list = words(names.to_str().unwrap(), terms.to_str().unwrap()).unwrap();
+        let kinds: Vec<(&str, &str)> = list.iter().map(|(_, i, k)| (i.as_str(), k.as_str())).collect();
+        assert_eq!(kinds, [("da Serafino", "stat_prefix"), ("Serafini", "organization")]);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
