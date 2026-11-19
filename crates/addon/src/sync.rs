@@ -271,7 +271,6 @@ fn cycle(con: &mut Connection, sync: &config::Sync, stop: &Receiver<()>) -> Resu
     }
     if let Ok(mut s) = SHARED.sync.lock() {
         s.at = Some(Instant::now());
-        s.received += received as u64;
         s.status = "ok".into();
     }
     Ok(next)

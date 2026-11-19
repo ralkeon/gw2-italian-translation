@@ -19,7 +19,7 @@ use std::{
 use gw2it_text::names::Names;
 use rusqlite::{Connection, named_params, params};
 
-use crate::{cache, config, markup, pipe, plural, state::SHARED};
+use crate::{cache, config, markup, pipe, plural};
 
 pub struct Seen {
     pub id: u32,
@@ -145,15 +145,12 @@ pub fn start(path: &Path) -> rusqlite::Result<()> {
             log::error!("map_it.db: {e}");
         }
     }
-    let count: i64 = con.query_row("SELECT count(*) FROM strings", [], |r| r.get(0))?;
-    SHARED.stored.store(count as u64, Ordering::Relaxed);
 
     let map: HashMap<(u32, u64), String> = {
         let mut stmt = con.prepare("SELECT id, hash, it FROM translations")?;
         stmt.query_map([], |r| Ok(((r.get::<_, u32>(0)?, r.get::<_, i64>(1)? as u64), r.get::<_, String>(2)?)))?
             .collect::<rusqlite::Result<_>>()?
     };
-    SHARED.translated.store(map.len() as u64, Ordering::Relaxed);
     *TRANSLATIONS.lock().unwrap() = Some(map);
     let full: HashMap<(u32, u64), String> = {
         let mut stmt = con.prepare("SELECT id, hash, it FROM full WHERE it <> ''")?;
@@ -417,9 +414,7 @@ pub fn record(seen: Seen) {
 fn remember(id: u32, hash: u64, it: &str) {
     if let Ok(mut map) = TRANSLATIONS.lock() {
         if let Some(map) = map.as_mut() {
-            if map.insert((id, hash), it.to_owned()).is_none() {
-                SHARED.translated.fetch_add(1, Ordering::Relaxed);
-            }
+            map.insert((id, hash), it.to_owned());
         }
     }
 }
@@ -484,7 +479,6 @@ fn run(mut con: Connection, mut watch: Watch, rx: &Receiver<Msg>) {
 /// Writes a batch.
 fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<()> {
     let tx = con.transaction()?;
-    let mut added = 0u64;
     // Texts to bring up to date in map_it.db once committed.
     let mut touched = Vec::new();
     let mut resend: Vec<(u32, u64)> = Vec::new();
@@ -499,7 +493,6 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<()> {
                 Msg::Seen(s) => {
                     let seen: i64 = seen_stmt.query_row(params![s.id, s.hash as i64, s.text, s.at_ms], |r| r.get(0))?;
                     if seen == 1 {
-                        added += 1;
                         touched.push((s.id, s.hash));
                     }
                 }
@@ -523,7 +516,6 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<()> {
             pipe::send_text(id, hash, &it);
         }
     }
-    SHARED.stored.fetch_add(added, Ordering::Relaxed);
     map_refresh_all(con, &touched);
     Ok(())
 }

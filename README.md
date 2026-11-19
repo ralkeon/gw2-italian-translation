@@ -59,8 +59,7 @@ Non servono chiavi né account.
    **Italian Translation** (se non lo sono già).
 
 Al primo avvio l'addon installa da solo il suo modulo in Text Translator e lo sceglie come modulo
-attivo. Dopo qualche secondo, il tempo di collegarsi al server, i testi compaiono in italiano. La finestra dell'addon si apre con
-`ALT+SHIFT+I`.
+attivo. Dopo qualche secondo, il tempo di collegarsi al server, i testi compaiono in italiano.
 
 Se i testi restano in inglese:
 - riavvia il gioco una volta (o scegli **Italian Translation** tra i moduli di Text Translator);

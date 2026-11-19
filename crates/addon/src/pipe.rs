@@ -157,7 +157,6 @@ fn session(req_name: &str, rep_name: &str) -> io::Result<()> {
 }
 
 fn on_text(id: u32, hash: u64, text: String) {
-    SHARED.received.fetch_add(1, Ordering::Relaxed);
     // A text with no translation yet stays English: the agents' row comes with a later sync.
     if let Some(it) = store::shown(id, hash) {
         send_text(id, hash, &it);

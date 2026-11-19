@@ -17,12 +17,10 @@ mod pipe;
 mod state;
 mod store;
 mod sync;
-mod ui;
 
 use nexus::{
     AddonFlags, UpdateProvider,
     gui::{RenderType, register_render, render},
-    keybind::{keybind_handler, register_keybind_with_string},
     paths::get_addon_dir,
 };
 
@@ -76,18 +74,7 @@ fn load() {
     pipe::start();
     sync::start(db);
 
-    register_render(RenderType::Render, render!(ui::render)).revert_on_unload();
     register_render(RenderType::OptionsRender, render!(options::render)).revert_on_unload();
-    register_keybind_with_string(
-        "GW2IT_TOGGLE_WINDOW",
-        keybind_handler!(|_, is_release| {
-            if !is_release {
-                ui::toggle();
-            }
-        }),
-        "ALT+SHIFT+I",
-    )
-    .revert_on_unload();
 
     log::info!("loaded, data in {}", dir.display());
 }
