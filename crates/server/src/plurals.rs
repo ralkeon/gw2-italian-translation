@@ -335,6 +335,12 @@ mod tests {
         assert!(!marks_ok("Fungo[pl:\"\"]"));
         assert!(!marks_ok("Fungo[pl:\"Funghi\""));
         assert!(marks_ok("Fungo"));
+        // Gender and plural on one word, as the official es/fr write it.
+        assert!(marks_ok("Bambino[f:\"Bambina\"][pl:\"Bambini\"][pf:\"Bambine\"]"));
+        assert!(marks_ok("Il[f:\"La\"] Bambino[f:\"Bambina\"] è tornato[f:\"tornata\"]"));
+        assert!(!marks_ok("[f:\"Bambina\"][pl:\"Bambini\"]"));
+        assert!(!marks_ok("Bambino [pl:\"Bambini\"]"));
+        assert_eq!(singular("Bambino[f:\"Bambina\"][pl:\"Bambini\"][pf:\"Bambine\"]"), "Bambino[f:\"Bambina\"]");
     }
 
     #[test]

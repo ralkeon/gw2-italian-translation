@@ -386,7 +386,9 @@ fn is_grammar(token: &str) -> bool {
     let Some(inner) = token.strip_prefix('[').and_then(|t| t.strip_suffix(']')) else {
         return false;
     };
-    inner == "s" || ["pl:", "f:", "m:"].iter().any(|p| inner.starts_with(p))
+    // `[pf:"..."]` is the feminine plural, after `[f:]` and `[pl:]` on the same word (the official es/fr/de write
+    // `ligero[f:"ligera"][pl:"ligeros"][pf:"ligeras"]`).
+    inner == "s" || ["pl:", "pf:", "f:", "m:"].iter().any(|p| inner.starts_with(p))
 }
 
 /// `<x id="3"/>` (or `<x id="3"></x>` collapsed by the caller: not accepted) -> 3.
@@ -587,6 +589,13 @@ mod tests {
         assert_eq!(prepare("Mini[pl:\"Minis of\"] Qadim").unwrap().xml, "Mini Qadim");
         assert_eq!(prepare("Raid God[f:\"Goddess\"]").unwrap().xml, "Raid God");
         assert_eq!(prepare("[f]%str1%").map(|p| p.xml), None);
+    }
+
+    #[test]
+    fn gender_and_plural_on_one_word() {
+        let it = "Bambino[f:\"Bambina\"][pl:\"Bambini\"][pf:\"Bambine\"]";
+        assert!(token_mismatch("Child[s]", it).is_empty());
+        assert_eq!(strip_grammar(it), "Bambino");
     }
 
     #[test]

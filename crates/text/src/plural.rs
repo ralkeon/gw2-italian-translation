@@ -57,12 +57,12 @@ const APPOSITION: &[&str] = &[
     "tempesta", "drago", "fantasma", "spirito", "mini", "extra", "standard", "premium",
 ];
 
-/// `it` without its `[pl:"..."]` marks: the singular text.
+/// `it` without its `[pl:"..."]` / `[pf:"..."]` marks: the singular text.
 pub fn singular(it: &str) -> String {
     let mut out = String::with_capacity(it.len());
     let mut rest = it;
     while !rest.is_empty() {
-        if rest.starts_with("[pl:\"")
+        if (rest.starts_with("[pl:\"") || rest.starts_with("[pf:\""))
             && let Some(end) = rest.find("\"]")
         {
             rest = &rest[end + 2..];
@@ -75,23 +75,42 @@ pub fn singular(it: &str) -> String {
     out
 }
 
-/// Every `[pl:"..."]` follows a letter and holds a non-empty word or phrase without quotes or
-/// brackets, and there is none that is not closed.
+/// Every `[pl:"..."]` (and feminine plural `[pf:"..."]`) follows a letter, or the gender mark of the
+/// same word (`Bambino[f:"Bambina"][pl:"Bambini"][pf:"Bambine"]`, as the official es/fr write it), and
+/// holds a non-empty word or phrase without quotes or brackets, and there is none that is not closed.
 pub fn marks_ok(it: &str) -> bool {
     let mut rest = it;
     let mut before = None;
+    // The last thing passed was a closed `[f:"..."]`/`[m:"..."]`/`[pl:"..."]` right after a word.
+    let mut after_mark = false;
     while !rest.is_empty() {
-        if rest.starts_with("[pl:") {
-            let Some(inner) = rest.strip_prefix("[pl:\"") else { return false };
+        for tag in ["[f:", "[m:"] {
+            if rest.starts_with(tag)
+                && let Some(inner) = rest.strip_prefix(&format!("{tag}\""))
+                && let Some(end) = inner.find("\"]")
+                && (before.is_some_and(char::is_alphabetic) || after_mark)
+            {
+                rest = &inner[end + 2..];
+                before = Some(']');
+                after_mark = true;
+            }
+        }
+        if rest.is_empty() {
+            break;
+        }
+        if rest.starts_with("[pl:") || rest.starts_with("[pf:") {
+            let Some(inner) = rest.strip_prefix("[pl:\"").or_else(|| rest.strip_prefix("[pf:\"")) else { return false };
             let Some(end) = inner.find("\"]") else { return false };
             let word = &inner[..end];
-            if word.trim().is_empty() || word.contains(['"', '[', ']', '<', '>', '%']) || !before.is_some_and(char::is_alphabetic) {
+            if word.trim().is_empty() || word.contains(['"', '[', ']', '<', '>', '%']) || !(before.is_some_and(char::is_alphabetic) || after_mark) {
                 return false;
             }
             rest = &inner[end + 2..];
             before = Some(']');
+            after_mark = true;
             continue;
         }
+        after_mark = false;
         let c = rest.chars().next().unwrap();
         before = Some(c);
         rest = &rest[c.len_utf8()..];
