@@ -44,7 +44,7 @@ static TRANSLATIONS: Mutex<Option<HashMap<(u32, u64), String>>> = Mutex::new(Non
 /// one (the table `full`, from the global database).
 static FULL: Mutex<Option<HashMap<(u32, u64), String>>> = Mutex::new(None);
 
-/// The option "Tutto in italiano" (config.full_italian): the game is answered from FULL first.
+/// The option "Traduzione completa" (config.full_italian): the game is answered from FULL first.
 static FULL_MODE: AtomicBool = AtomicBool::new(false);
 
 /// The names that stay in English (gw2it_text::names), from the global database: a text that is
@@ -382,7 +382,7 @@ pub fn lookup(id: u32, hash: u64) -> Option<String> {
     TRANSLATIONS.lock().ok()?.as_ref()?.get(&(id, hash)).cloned()
 }
 
-/// What the game shows for a text: with the option "Tutto in italiano" the all-Italian variant's
+/// What the game shows for a text: with the option "Traduzione completa" the all-Italian variant's
 /// row where there is one, else the hybrid translation.
 pub fn shown(id: u32, hash: u64) -> Option<String> {
     if FULL_MODE.load(Ordering::Relaxed)

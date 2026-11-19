@@ -12,16 +12,23 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     // The translators' keys of earlier versions ([deepl], [gemini], [azure], [[llm]]) are not read
     // any more, and are left out when the file is written back.
     pub sync: Sync,
     pub install: Install,
-    /// "Tutto in italiano": the names the hybrid translation keeps in English (skills, traits,
-    /// places, boons...) shown in Italian too, where the global database has the all-Italian row.
+    /// "Traduzione completa" (the first choice of a new installation): the names the hybrid
+    /// translation keeps in English (skills, traits, places, boons...) shown in Italian too, where
+    /// the global database has the all-Italian row. An existing config.toml keeps its choice.
     pub full_italian: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { sync: Sync::default(), install: Install::default(), full_italian: true }
+    }
 }
 
 /// The project's translations database (crates/server on ifalna).

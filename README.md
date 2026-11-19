@@ -12,7 +12,7 @@ attraverso l'addon [Text Translator](https://github.com/ideka/text-translator-pu
 >
 > **Assegna in Nexus un tasto a Show Translated Text** (Text Translator): premilo per vedere al volo
 > il nome originale in inglese, ripremilo per tornare all'italiano. Vale per entrambe le varianti
-> (ibrida e tutto in italiano); l'addon intanto continua a ricevere le traduzioni.
+> (completa e ibrida); l'addon intanto continua a ricevere le traduzioni.
 
 > [!WARNING]
 > **Testi che non si aggiornano?** Se un testo resta in inglese anche dopo che è stato tradotto, o se
@@ -76,17 +76,15 @@ L'addon si collega al server del progetto, dove vengono tradotti i testi del gio
 traduzioni dei testi che incontri. Un testo non ancora tradotto resta in inglese finché la sua
 traduzione non arriva; quando arriva compare da sola, senza riavviare.
 
-## Ibrida o tutto in italiano
+## Traduzione completa o ibrida
 
-La traduzione può essere ibrida o completamente in italiano. Per attivare la versione tutta in
-italiano: Nexus → opzioni di **Italian Translation** → casella **Tutto in italiano**.
-- **spenta** (traduzione ibrida, la scelta di partenza): i nomi di abilità, tratti,
-  specializzazioni, luoghi, fazioni, boon e condition restano in inglese, come li dicono di solito
-  i giocatori italiani e come li trovi nelle guide e sulla wiki;
-- **accesa**: anche quelli in italiano (Berserker Fantasma, Arco del Leone, Forza, Legione delle
-  Ceneri), con un glossario scelto apposta e le traduzioni ufficiali di Guild Wars 1 dove esistono.
-  La variante si completa giorno dopo giorno: i testi non ancora pronti si vedono come
-  nell'ibrida.
+Si sceglie in Nexus → opzioni di **Italian Translation**:
+- **Traduzione completa** (la scelta di partenza): anche i nomi di abilità, tratti,
+  specializzazioni, luoghi, fazioni, boon e condition sono in italiano (Berserker Fantasma, Arco
+  del Leone, Forza, Legione delle Ceneri), con le traduzioni ufficiali di Guild Wars 1 dove
+  esistono. Si completa giorno dopo giorno: i testi non ancora pronti si vedono come nell'ibrida;
+- **Traduzione ibrida**: quei nomi restano in inglese, come li dicono di solito i giocatori
+  italiani e come li trovi nelle guide e sulla wiki.
 
 Il cambio vale subito, senza riavviare.
 

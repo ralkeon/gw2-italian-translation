@@ -22,17 +22,20 @@ pub fn render(ui: &Ui) {
 
     // Applied at once.
     let mut full = config::get().full_italian;
-    if ui.checkbox("Tutto in italiano", &mut full) {
+    let before = full;
+    ui.radio_button("Traduzione completa", &mut full, true);
+    ui.same_line();
+    ui.radio_button("Traduzione ibrida", &mut full, false);
+    if full != before {
         let mut saved = config::get();
         saved.full_italian = full;
         config::set(saved);
         store::set_full_mode(full);
     }
     ui.text_wrapped(
-        "Spenta (traduzione ibrida): i nomi di abilità, tratti, specializzazioni, luoghi, boon e \
-         condition restano in inglese, come li dicono i giocatori italiani. Accesa: anche quelli \
-         in italiano (Berserker Fantasma, Arco del Leone, Forza), dove la traduzione completa è \
-         già pronta; il resto resta com'è.",
+        "Completa: anche i nomi di abilità, tratti, specializzazioni, luoghi, boon e condition in \
+         italiano (Berserker Fantasma, Arco del Leone, Forza), dove sono già pronti. Ibrida: quei \
+         nomi restano in inglese, come li dicono i giocatori italiani.",
     );
     ui.text_disabled(format!("Testi tutti in italiano già pronti: {}", store::full_count()));
     ui.separator();
