@@ -5,11 +5,15 @@
 # per step in night.log: start, end, rc (124 = limit).
 #   gw2-update.sh            the official client (Wine) updates ~/gw2/client/Gw2.dat with -image, no login
 #   ./gw2it-server seeds     the new seeds of Text Translator's shared pool -> ~/gw2/seeds.db (read only)
+#   mappa.sh                 the other module's map (mappa/map_it.db, its dev repository's release): only its text IDs
+#                            and English are used (gw2dat to place the files, mapfeed.py below), never its translations
 #   ./gw2it-server gw2dat    every English text of that Gw2.dat (plain + opened with the seeds) -> data/gw2dat_en.db,
 #                            with French, German, Spanish (table other: references for the agents); the copy of the
 #                            night before is kept as data/gw2dat_en.prev.db
 #   agent/pilot/tools/feed.py  texts new or changed by a patch at or below the long run's last key ->
 #                            agent/pilot/queue.txt, which the next batch takes first (the others come in key order)
+#   agent/pilot/tools/mapfeed.py  texts the map knows and Gw2.dat does not open (no seed in the pool yet) ->
+#                            data/gw2dat_en.db (how = map) and, at or below the long run's last key, agent/pilot/queue.txt
 #   agent/ltsync-pull.sh     the other module's repos (fetch + fast-forward only) and what changed in them
 #   agent/ltreviewed.py      their hand-reviewed translations -> data/lt_reviewed.db (references for the agents)
 #   nightly.sh publish       the export (data/gw2it.db -> export/gw2it.db.gz); no spare on Cloudflare since 2026-11-19
@@ -27,9 +31,11 @@ step() {  # name limit command...
 }
 step gw2-update 2h sh gw2-update.sh
 step seeds 30m sh -c './gw2it-server seeds --out "$HOME/gw2/seeds.db" >> seeds.log 2>&1'
+step mappa 15m sh mappa.sh
 [ -s data/gw2dat_en.db ] && sqlite3 data/gw2dat_en.db ".backup data/gw2dat_en.prev.db"
 step gw2dat 1h sh -c './gw2it-server gw2dat --dat "$HOME/gw2/client/Gw2.dat" --seeds "$HOME/gw2/seeds.db" --out data/gw2dat_en.db --db data/gw2it.db --file mappa/map_it.db >> gw2dat.log 2>&1'
 step feed 10m sh -c 'python3 agent/pilot/tools/feed.py >> agent/pilot/feed.log 2>&1'
+step mapfeed 10m sh -c 'python3 agent/pilot/tools/mapfeed.py >> agent/pilot/feed.log 2>&1'
 step pull 30m sh agent/ltsync-pull.sh
 step lt-reviewed 10m sh -c 'python3 agent/ltreviewed.py >> ltreviewed.log 2>&1'
 step publish 2h sh nightly.sh publish
