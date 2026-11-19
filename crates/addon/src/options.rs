@@ -61,9 +61,7 @@ fn tips(ui: &Ui) {
     let icon = [height * 0.8 * 64.0 / 56.0, height * 0.8];
     let text = ui.calc_text_size(LABEL);
     let width = pad + icon[0] + pad * 0.75 + text[0] + pad;
-    ui.align_text_to_frame_padding();
     ui.text_disabled(NOTE);
-    ui.same_line();
     let clicked = {
         let _button = ui.push_style_color(StyleColor::Button, KOFI);
         let _hovered = ui.push_style_color(StyleColor::ButtonHovered, KOFI_HOVER);
