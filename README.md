@@ -48,7 +48,7 @@ contattatemi (basta aprire una issue su questo repository) e me ne occuperò io.
 - **[Nexus](https://raidcore.gg/Nexus)** di Raidcore, il caricatore di addon.
 - **[Text Translator](https://github.com/ideka/text-translator-public)** di Ideka, da installare con un clic dalla libreria degli addon di Nexus.
 
-Non servono chiavi né account: le traduzioni arrivano già fatte dal database del progetto.
+Non servono chiavi né account.
 
 ## Installazione
 
@@ -59,8 +59,7 @@ Non servono chiavi né account: le traduzioni arrivano già fatte dal database d
    **Italian Translation** (se non lo sono già).
 
 Al primo avvio l'addon installa da solo il suo modulo in Text Translator e lo sceglie come modulo
-attivo. Dopo qualche secondo (il tempo del primo scambio con il database del progetto, che porta
-tutte le traduzioni già pronte) i testi compaiono in italiano. La finestra dell'addon si apre con
+attivo. Dopo qualche secondo, il tempo di collegarsi al server, i testi compaiono in italiano. La finestra dell'addon si apre con
 `ALT+SHIFT+I`.
 
 Se i testi restano in inglese:
@@ -72,15 +71,9 @@ Se i testi restano in inglese:
 
 ## Come funziona
 
-- Le traduzioni sono fatte sul server del progetto da agenti di traduzione, che lavorano su tutti
-  i testi del gioco (anche quelli che nessuno ha ancora visto) con le stesse regole e lo stesso
-  glossario, confrontandoli con le versioni ufficiali in francese, tedesco e spagnolo e con Guild
-  Wars 1. Ogni notte il server legge i testi nuovi delle patch e li mette in coda.
-- Ogni 2 minuti l'addon scarica le traduzioni nuove o corrette e le mostra subito in gioco. Le
-  tiene sul tuo PC (`strings.db`). L'addon non traduce niente da sé e non invia niente.
-- Un testo non ancora tradotto resta in inglese finché la sua traduzione non arriva.
-- Le frasi che cambiano con il genere del tuo personaggio (o di un PNG) usano la forma giusta:
-  "Benvenuto" o "Benvenuta", "Bambino" o "Bambina".
+L'addon si collega al server del progetto, dove vengono tradotti i testi del gioco, e ti porta le
+traduzioni dei testi che incontri. Un testo non ancora tradotto resta in inglese finché la sua
+traduzione non arriva; quando arriva compare da sola, senza riavviare.
 
 ### Ibrida o tutto in italiano
 
@@ -96,9 +89,7 @@ italiano: Nexus → opzioni di **Italian Translation** → casella **Tutto in it
 
 Il cambio vale subito, senza riavviare.
 
-Impostazioni e traduzioni stanno in `Guild Wars 2/addons/italian_translation/`
-(`config.toml` e `strings.db`). Le chiavi dei traduttori delle versioni precedenti non servono più
-e vengono tolte da `config.toml`.
+Impostazioni e traduzioni stanno in `Guild Wars 2/addons/italian_translation/`.
 
 ## Stato del progetto
 
