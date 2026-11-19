@@ -242,6 +242,23 @@ struct Slot {
     paused_until: Mutex<Option<Instant>>,
 }
 
+impl Slot {
+    /// Pauses the translator after `e` and logs it. Requests run in parallel (no lock held during
+    /// one): when several fail at once, only the first logs, the others find the pause already set
+    /// (a frozen server answered 20 queued texts with 20 identical lines, 2026-11-19).
+    fn fail(&self, e: &Error) {
+        let pause = self.engine.pause(e);
+        let mut until = self.paused_until.lock().unwrap();
+        if until.is_some_and(|t| Instant::now() < t) {
+            return;
+        }
+        log::warn!("{}: {e}; paused for {}s", self.engine.name(), pause.as_secs());
+        if !pause.is_zero() {
+            *until = Some(Instant::now() + pause);
+        }
+    }
+}
+
 /// Translators in order of preference. Each one that fails is paused for a while (an hour when
 /// out of quota) and the next one takes over; when its pause ends, it is tried first again.
 /// Usable from several threads at once (the server): no lock is held during a request.
@@ -307,11 +324,7 @@ impl Chain {
                     return Ok(Translated { texts, by, signatures, slot: position });
                 }
                 Err(e) => {
-                    let pause = slot.engine.pause(&e);
-                    log::warn!("{}: {e}; paused for {}s", slot.engine.name(), pause.as_secs());
-                    if !pause.is_zero() {
-                        *slot.paused_until.lock().unwrap() = Some(Instant::now() + pause);
-                    }
+                    slot.fail(&e);
                     last = e;
                 }
             }
@@ -338,11 +351,7 @@ impl Chain {
                     return Ok(answer);
                 }
                 Err(e) => {
-                    let pause = slot.engine.pause(&e);
-                    log::warn!("{}: {e}; paused for {}s", slot.engine.name(), pause.as_secs());
-                    if !pause.is_zero() {
-                        *slot.paused_until.lock().unwrap() = Some(Instant::now() + pause);
-                    }
+                    slot.fail(&e);
                     last = e;
                 }
             }
