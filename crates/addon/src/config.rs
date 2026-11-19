@@ -80,8 +80,9 @@ const SYNC_FALLBACK_URL: &str = "https://gw2it-sync.gw2it-sync.workers.dev";
 
 static CONFIG: Mutex<Option<(PathBuf, Config)>> = Mutex::new(None);
 
-/// contributor.json in the addon folder: whoever has it gets the translation editor.
-/// `"save_map": true` also keeps map_it.db up to date (store.rs), without having to create it.
+/// contributor.json in the addon folder (the project's own installations): `user` is the name given
+/// to the server at registration and the author of map_it.db's rows; `"save_map": true` keeps
+/// map_it.db up to date (store.rs), without having to create it. There is no editor any more.
 #[derive(Deserialize)]
 struct Contributor {
     user: String,
@@ -92,7 +93,7 @@ struct Contributor {
 static CONTRIBUTOR: Mutex<Option<String>> = Mutex::new(None);
 static SAVE_MAP: AtomicBool = AtomicBool::new(false);
 
-/// Reads contributor.json (at load). Missing: no editor.
+/// Reads contributor.json (at load), if there.
 pub fn load_contributor(path: &Path) {
     let mut save_map = false;
     let user = match fs::read_to_string(path) {
@@ -113,7 +114,7 @@ pub fn load_contributor(path: &Path) {
         Err(_) => None,
     };
     if let Some(user) = &user {
-        log::info!("contributor {user}: editor on{}", if save_map { ", map_it.db on" } else { "" });
+        log::info!("contributor {user}{}", if save_map { ": map_it.db on" } else { "" });
     }
     SAVE_MAP.store(save_map, Ordering::Relaxed);
     *CONTRIBUTOR.lock().unwrap() = user;
@@ -124,7 +125,7 @@ pub fn save_map() -> bool {
     SAVE_MAP.load(Ordering::Relaxed)
 }
 
-/// The contributor's name, if this installation has the editor.
+/// The contributor's name, if contributor.json gives one.
 pub fn contributor() -> Option<String> {
     CONTRIBUTOR.lock().ok()?.clone()
 }

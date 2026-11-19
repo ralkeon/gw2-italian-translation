@@ -24,7 +24,6 @@ pub struct Sync {
     pub status: String,
     /// Last sync that worked.
     pub at: Option<Instant>,
-    pub sent: u64,
     pub received: u64,
 }
 
@@ -33,5 +32,5 @@ pub static SHARED: Shared = Shared {
     received: AtomicU64::new(0),
     stored: AtomicU64::new(0),
     translated: AtomicU64::new(0),
-    sync: Mutex::new(Sync { status: String::new(), at: None, sent: 0, received: 0 }),
+    sync: Mutex::new(Sync { status: String::new(), at: None, received: 0 }),
 };

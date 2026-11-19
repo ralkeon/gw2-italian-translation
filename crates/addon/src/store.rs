@@ -1,8 +1,7 @@
 //! strings.db: every source text the game asked for, and its Italian translations.
 //!
 //! One background thread owns the connection: it does all the writes, in batches (requests come
-//! in bursts of hundreds), answers the editor's searches, and notices edits made to the database
-//! by other programs. Translations are also kept in memory, so the game gets an answer without
+//! in bursts of hundreds), and notices the rows the sync thread (or another program) wrote. Translations are also kept in memory, so the game gets an answer without
 //! touching the disk.
 
 use std::{
@@ -30,21 +29,8 @@ pub struct Seen {
     pub at_ms: i64,
 }
 
-/// A text as the editor shows it.
-#[derive(Clone)]
-pub struct Row {
-    pub id: u32,
-    pub hash: u64,
-    pub en: String,
-    pub it: Option<String>,
-    /// 'auto' or 'manual'; None without a translation.
-    pub status: Option<String>,
-}
-
 enum Msg {
     Seen(Seen),
-    Manual { id: u32, hash: u64, it: String, author: String },
-    Search { query: String, exact: bool, reply: Sender<Vec<Row>> },
     /// The variant changed (set_full_mode): the texts seen here that differ are sent again.
     Resend,
 }
@@ -64,8 +50,6 @@ static FULL_MODE: AtomicBool = AtomicBool::new(false);
 /// The names that stay in English (gw2it_text::names), from the global database: a text that is
 /// one is not translated.
 static NAMES: Mutex<Option<Names>> = Mutex::new(None);
-
-const SEARCH_MAX: usize = 200;
 
 pub(crate) const SCHEMA: &str = "
     PRAGMA journal_mode = WAL;
@@ -430,23 +414,6 @@ pub fn record(seen: Seen) {
     send(Msg::Seen(seen));
 }
 
-/// Keeps a hand correction and shows it in the game right away. Never overwritten by a row of the
-/// project's database.
-pub fn save_manual(id: u32, hash: u64, it: String, author: &str) {
-    remember(id, hash, &it);
-    pipe::send_text(id, hash, &it);
-    send(Msg::Manual { id, hash, it, author: author.to_owned() });
-}
-
-/// Texts whose English or Italian contains `query`, or whose ID is `query`; the most recently
-/// seen first, then the ones of the global database the game has not shown here. With `exact`, the whole English or Italian text is `query` (capitals too), not just
-/// a part of it. Empty query: the most recently seen texts. The answer comes on the receiver.
-pub fn search(query: String, exact: bool) -> Receiver<Vec<Row>> {
-    let (reply, rx) = mpsc::channel();
-    send(Msg::Search { query, exact, reply });
-    rx
-}
-
 fn remember(id: u32, hash: u64, it: &str) {
     if let Ok(mut map) = TRANSLATIONS.lock() {
         if let Some(map) = map.as_mut() {
@@ -502,20 +469,8 @@ fn run(mut con: Connection, mut watch: Watch, rx: &Receiver<Msg>) {
                 break;
             }
         }
-        let searches = match save(&mut con, batch) {
-            Ok(searches) => searches,
-            Err(e) => {
-                log::error!("strings.db: {e}");
-                Vec::new()
-            }
-        };
-        for (query, exact, reply) in searches {
-            match find(&con, &query, exact) {
-                Ok(rows) => {
-                    let _ = reply.send(rows);
-                }
-                Err(e) => log::error!("search {query:?}: {e}"),
-            }
+        if let Err(e) = save(&mut con, batch) {
+            log::error!("strings.db: {e}");
         }
         if let Err(e) = watch.check(&con) {
             log::error!("strings.db: {e}");
@@ -526,31 +481,18 @@ fn run(mut con: Connection, mut watch: Watch, rx: &Receiver<Msg>) {
     }
 }
 
-/// Writes a batch; returns the searches in it, to run once it is committed.
-fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, bool, Sender<Vec<Row>>)>> {
+/// Writes a batch.
+fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<()> {
     let tx = con.transaction()?;
     let mut added = 0u64;
-    let mut searches = Vec::new();
     // Texts to bring up to date in map_it.db once committed.
     let mut touched = Vec::new();
-    let mut repaired = Vec::new();
     let mut resend: Vec<(u32, u64)> = Vec::new();
     {
         let mut seen_stmt = tx.prepare_cached(
             "INSERT INTO strings (id, hash, en, first_seen, last_seen) VALUES (?1, ?2, ?3, ?4, ?4)
              ON CONFLICT (id, hash) DO UPDATE SET last_seen = excluded.last_seen, seen = seen + 1
              RETURNING seen",
-        )?;
-        let mut manual_stmt = tx.prepare_cached(
-            "INSERT INTO translations (id, hash, it, status, source, at) VALUES (?1, ?2, ?3, 'manual', ?4, ?5)
-             ON CONFLICT (id, hash) DO UPDATE SET it = excluded.it, status = excluded.status,
-                 source = excluded.source, at = excluded.at",
-        )?;
-        // The same English under other IDs: their machine translations take the hand correction
-        // (the global database does the same for everyone: server/sql/same.sql).
-        let mut same_stmt = tx.prepare_cached(
-            "UPDATE translations SET it = ?3, status = 'manual', source = ?4, at = ?5
-             WHERE hash = ?2 AND id <> ?1 AND status = 'auto' AND it <> ?3 RETURNING id",
         )?;
         for m in batch {
             match m {
@@ -561,18 +503,6 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
                         touched.push((s.id, s.hash));
                     }
                 }
-                Msg::Manual { id, hash, it, author } => {
-                    let (source, now) = (format!("editor:{author}"), now_ms());
-                    manual_stmt.execute(params![id, hash as i64, it, source, now])?;
-                    touched.push((id, hash));
-                    let others: Vec<u32> =
-                        same_stmt.query_map(params![id, hash as i64, it, source, now], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-                    for other in others {
-                        touched.push((other, hash));
-                        repaired.push((other, hash, it.clone()));
-                    }
-                }
-                Msg::Search { query, exact, reply } => searches.push((query, exact, reply)),
                 Msg::Resend => {
                     // The texts seen here, and those Text Translator's cache holds (cache.rs).
                     let rows: Vec<(u32, i64, bool)> = tx
@@ -595,34 +525,7 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
     }
     SHARED.stored.fetch_add(added, Ordering::Relaxed);
     map_refresh_all(con, &touched);
-    // The other IDs of the same English that took a hand correction: the game shows it from now on.
-    for (id, hash, it) in repaired {
-        remember(id, hash, &it);
-        pipe::send_text(id, hash, &shown(id, hash).unwrap_or(it));
-    }
-    Ok(searches)
-}
-
-fn find(con: &Connection, query: &str, exact: bool) -> rusqlite::Result<Vec<Row>> {
-    let query = query.trim();
-    let id: Option<u32> = query.parse().ok();
-    let pattern = format!("%{}%", query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
-    let mut stmt = con.prepare_cached(
-        "SELECT s.id, s.hash, s.en, t.it, t.status
-         FROM (SELECT id, hash, en, last_seen FROM strings
-               UNION ALL
-               SELECT c.id, c.hash, c.en, 0 FROM cloud_strings c
-               WHERE NOT EXISTS (SELECT 1 FROM strings x WHERE x.id = c.id AND x.hash = c.hash)) s
-         LEFT JOIN translations t ON t.id = s.id AND t.hash = s.hash
-         WHERE ?1 = '' OR s.id = ?2
-            OR (?5 = 0 AND (s.en LIKE ?3 ESCAPE '\\' OR t.it LIKE ?3 ESCAPE '\\'))
-            OR (?5 = 1 AND (s.en = ?1 OR t.it = ?1))
-         ORDER BY s.last_seen DESC LIMIT ?4",
-    )?;
-    stmt.query_map(params![query, id, pattern, SEARCH_MAX as i64, exact], |r| {
-        Ok(Row { id: r.get(0)?, hash: r.get::<_, i64>(1)? as u64, en: r.get(2)?, it: r.get(3)?, status: r.get(4)? })
-    })?
-    .collect()
+    Ok(())
 }
 
 /// Notices translations changed by other programs (a database editor, a script) and sends them
@@ -724,67 +627,6 @@ impl Watch {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn exact_search_finds_the_whole_text_only() {
-        let con = Connection::open_in_memory().unwrap();
-        con.execute_batch(SCHEMA).unwrap();
-        con.execute_batch(
-            "INSERT INTO strings VALUES (1, 1, 'Seraph', 0, 3, 1), (2, 2, 'Seraph Guard', 0, 2, 1), (3, 3, 'seraph', 0, 1, 1);
-             INSERT INTO translations VALUES (1, 1, 'Serafini', 'auto', 'deepl', 1), (2, 2, 'Guardia dei Serafini', 'auto', 'deepl', 1);",
-        )
-        .unwrap();
-        let ids = |query: &str, exact: bool| -> Vec<u32> { find(&con, query, exact).unwrap().iter().map(|r| r.id).collect() };
-        // A part of the text, with any capitals, or the whole text with exactly its capitals.
-        assert_eq!(ids("Seraph", false), [1, 2, 3]);
-        assert_eq!(ids("Seraph", true), [1]);
-        assert_eq!(ids("Serafini", true), [1]);
-        assert_eq!(ids("Guardia dei Serafini", true), [2]);
-        assert_eq!(ids("Guardia", true), Vec::<u32>::new());
-        // An ID still finds its text, and an empty search everything.
-        assert_eq!(ids("2", true), [2]);
-        assert_eq!(ids("", true), [1, 2, 3]);
-        // The texts of the global database the game has not shown here: after the others.
-        con.execute_batch(
-            "INSERT INTO cloud_strings VALUES (4, 4, 'Seraph Archer'), (1, 1, 'Seraph');
-             INSERT INTO translations VALUES (4, 4, 'Arciere dei Seraph', 'auto', 'cloud:Bea', 1);",
-        )
-        .unwrap();
-        assert_eq!(ids("Seraph", false), [1, 2, 3, 4]);
-        assert_eq!(ids("Arciere", false), [4]);
-        assert_eq!(find(&con, "4", true).unwrap()[0].en, "Seraph Archer");
-    }
-
-    #[test]
-    fn a_hand_correction_goes_to_the_same_english_under_other_ids() {
-        let mut con = Connection::open_in_memory().unwrap();
-        con.execute_batch(SCHEMA).unwrap();
-        con.execute_batch(
-            "INSERT INTO strings VALUES (1, 7, 'Torch', 0, 0, 1), (2, 7, 'Torch', 0, 0, 1), (3, 7, 'Torch', 0, 0, 1),
-                                        (4, 8, 'Torches', 0, 0, 1);
-             INSERT INTO translations VALUES (1, 7, 'Fiaccola', 'auto', 'deepl', 1), (2, 7, 'Fiaccola', 'auto', 'copy', 1),
-                                             (3, 7, 'Torcia di Bea', 'manual', 'cloud:Bea', 1), (4, 8, 'Fiaccole', 'auto', 'deepl', 1);",
-        )
-        .unwrap();
-        save(&mut con, vec![Msg::Manual { id: 1, hash: 7, it: "Torcia".into(), author: "Ana".into() }]).unwrap();
-        let rows: Vec<(u32, String, String, String)> = con
-            .prepare("SELECT id, it, status, source FROM translations ORDER BY id")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap();
-        // The machine translation takes it; another hand correction and another English do not.
-        assert_eq!(
-            rows,
-            [
-                (1, "Torcia".into(), "manual".into(), "editor:Ana".into()),
-                (2, "Torcia".into(), "manual".into(), "editor:Ana".into()),
-                (3, "Torcia di Bea".into(), "manual".into(), "cloud:Bea".into()),
-                (4, "Fiaccole".into(), "auto".into(), "deepl".into()),
-            ]
-        );
-    }
 
     #[test]
     fn map_follows_strings() {

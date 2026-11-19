@@ -1,18 +1,16 @@
 //! The project's translations database (crates/server on ifalna): every couple of minutes the
-//! translations made there by the agents come here, with the hand corrections of a contributor's
-//! editor going the other way. One request does both.
+//! translations made there by the agents come here. Read only: nothing is sent but where the last
+//! sync stopped.
 //!
 //! This thread has its own connection to strings.db. What it writes is seen by the store thread
 //! like any other outside change (store::Watch), which keeps it in memory and sends it to the game
-//! and to map_it.db if there. Received rows have source 'cloud:<author>' and are never sent back.
+//! and to map_it.db if there. Received rows have source 'cloud:<author>'.
 //!
-//! Merge rules, the same as on the server: a hand correction replaces anything, a machine
-//! translation only replaces another machine translation. A hand correction made here and not
-//! sent yet is never replaced.
+//! Merge rules: a received hand correction replaces anything, a received machine translation only a
+//! machine translation (the hand corrections an earlier version's editor made here stay).
 //!
 //! When the main server does not answer, the same sync goes to its spare (config.rs), which holds
-//! a copy of it as of last night with the same seq; the main server takes back what was written
-//! there (crates/server/src/replicate.rs). Every sync tries the main server first.
+//! a copy of it as of last night with the same seq. Every sync tries the main server first.
 
 use std::{
     path::{Path, PathBuf},
@@ -35,8 +33,6 @@ use crate::{
     store::{self, now_ms},
 };
 
-/// Rows sent in one request (the server accepts up to 200).
-const PUSH_MAX: usize = 200;
 /// Requests in a row when there is a lot to exchange, e.g. the first sync of an installation.
 const ROUNDS_MAX: usize = 20;
 /// Between two syncs, unless the server asks for another interval.
@@ -258,15 +254,6 @@ impl Mark {
     }
 }
 
-/// A row to send: [id, hash, en, it, status] (+ the server's proof for a text it translated: the
-/// signature and the XML it answered), and its place in the order of sending.
-struct Outgoing {
-    row: Value,
-    at: i64,
-    id: i64,
-    hash: i64,
-}
-
 /// A row received: [id, hash, en, it, status, author, seq].
 #[derive(Deserialize)]
 struct Remote(u32, String, String, String, String, String, #[allow(dead_code)] i64);
@@ -305,8 +292,8 @@ struct Reply {
 #[derive(Deserialize)]
 struct RemoteFull(u32, String, String, #[allow(dead_code)] i64);
 
-/// One sync: a few requests while there is more to send or to receive. Returns the wait before
-/// the next one.
+/// One sync: a few requests while there is more to receive. Returns the wait before the next one.
+/// Nothing is sent but the marks: the translations are made on the server only.
 fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Duration, Error> {
     let refused = |e| match e {
         Error::Unauthorized(_) => Error::Unauthorized(target.spare),
@@ -315,22 +302,17 @@ fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Du
     let server = target.url;
     let token = if target.token.is_empty() { register(target).map_err(refused)? } else { target.token.to_owned() };
     let mut next = INTERVAL;
-    let (mut sent, mut received) = (0, 0);
+    let mut received = 0;
     for _ in 0..ROUNDS_MAX {
         let mut mark = Mark::load(con, target.seq_key())?;
-        let outgoing = pending(con, mark)?;
-        let rows: Vec<&Value> = outgoing.iter().map(|o| &o.row).collect();
         // The glossary is no longer used here (the rows come made by the agents): its seq still
         // moves on, so that a server that sends it does not send it again.
         let reply: Reply = post(
             &format!("{server}/sync"),
             Some(&token),
-            &json!({ "since": mark.seq, "rows": rows, "gsince": mark.gseq, "glossary": [], "nsince": mark.nseq, "usince": mark.useq, "fsince": mark.fseq }),
+            &json!({ "since": mark.seq, "rows": [], "gsince": mark.gseq, "glossary": [], "nsince": mark.nseq, "usince": mark.useq, "fsince": mark.fseq }),
         )
         .map_err(refused)?;
-        if let Some(last) = outgoing.last() {
-            (mark.at, mark.id, mark.hash) = (last.at, last.id, last.hash);
-        }
         mark.seq = mark.seq.max(reply.seq);
         mark.gseq = mark.gseq.max(reply.gseq);
         mark.nseq = mark.nseq.max(reply.nseq);
@@ -341,19 +323,17 @@ fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Du
             mark.fseq = mark.fseq.max(reply.fseq);
         }
         received += apply(con, &reply.rows, mark, target.seq_key())?;
-        sent += outgoing.len();
         next = Duration::from_secs(reply.next_s.clamp(30, 3600));
         let stopping = matches!(stop.try_recv(), Err(TryRecvError::Disconnected));
-        if stopping || (outgoing.len() < PUSH_MAX && !reply.more && !reply.gmore && !reply.fmore) {
+        if stopping || (!reply.more && !reply.gmore && !reply.fmore) {
             break;
         }
     }
-    if sent > 0 || received > 0 {
-        log::info!("sync: {sent} sent, {received} received");
+    if received > 0 {
+        log::info!("sync: {received} received");
     }
     if let Ok(mut s) = SHARED.sync.lock() {
         s.at = Some(Instant::now());
-        s.sent += sent as u64;
         s.received += received as u64;
         s.status = if target.spare { "ok (server di riserva)".into() } else { "ok".into() };
     }
@@ -390,34 +370,6 @@ fn post<T: DeserializeOwned>(url: &str, token: Option<&str>, body: &Value) -> Re
             Err(Error::Other(format!("HTTP {s} {}", text.chars().take(200).collect::<String>())))
         }
     }
-}
-
-/// The hand corrections made here (a contributor's editor) after `mark`, oldest first: nothing else
-/// is made here any more. Only texts whose English is known here (seen in the game, or received from
-/// the global database): the English goes with them, for whoever reads the global database.
-fn pending(con: &Connection, mark: Mark) -> rusqlite::Result<Vec<Outgoing>> {
-    let mut stmt = con.prepare_cached(
-        "SELECT t.id, t.hash, s.en, t.it, t.status, t.at, p.sig, p.raw FROM translations t
-         JOIN (SELECT id, hash, en FROM strings
-               UNION ALL
-               SELECT c.id, c.hash, c.en FROM cloud_strings c
-               WHERE NOT EXISTS (SELECT 1 FROM strings x WHERE x.id = c.id AND x.hash = c.hash)) s
-           ON s.id = t.id AND s.hash = t.hash
-         LEFT JOIN proofs p ON p.id = t.id AND p.hash = t.hash AND t.status = 'auto'
-         WHERE t.status = 'manual' AND t.source NOT LIKE 'cloud:%' AND (t.at, t.id, t.hash) > (?1, ?2, ?3)
-         ORDER BY t.at, t.id, t.hash LIMIT ?4",
-    )?;
-    stmt.query_map(params![mark.at, mark.id, mark.hash, PUSH_MAX as i64], |r| {
-        let (id, hash): (i64, i64) = (r.get(0)?, r.get(1)?);
-        let (en, it, status): (String, String, String) = (r.get(2)?, r.get(3)?, r.get(4)?);
-        let hash_hex = format!("{:016x}", hash as u64);
-        let row = match (r.get::<_, Option<String>>(6)?, r.get::<_, Option<String>>(7)?) {
-            (Some(sig), Some(raw)) => json!([id, hash_hex, en, it, status, sig, raw]),
-            _ => json!([id, hash_hex, en, it, status]),
-        };
-        Ok(Outgoing { row, at: r.get(5)?, id, hash })
-    })?
-    .collect()
 }
 
 /// The all-Italian variant's rows received: kept in the table `full` (store.rs reads them from there
@@ -599,42 +551,28 @@ mod tests {
     #[test]
     fn merge() {
         let mut con = db();
-        // Only the hand corrections are sent: a machine translation made by an earlier version stays here.
-        let out = pending(&con, Mark::default()).unwrap();
-        assert_eq!(out.iter().map(|o| o.row.to_string()).collect::<Vec<_>>(), [r#"[2,"0000000000000002","Shield","Scudo","manual"]"#]);
-        // Sent: the mark is past both rows.
-        let sent = Mark { seq: 0, at: 20, id: 2, hash: 2, ..Mark::default() };
-        assert!(pending(&con, sent).unwrap().is_empty());
-
-        // A hand correction made after sending: not replaced by the server's.
-        con.execute("UPDATE translations SET it = 'Scudo nuovo', at = 30 WHERE id = 2", []).unwrap();
+        // Row 2 is a hand correction an earlier version's editor made here (at 20).
+        let past = Mark { seq: 0, at: 20, id: 2, hash: 2, ..Mark::default() };
         let rows = [
-            remote(1, "Sword", "Lama", "auto"),       // machine over machine: taken
-            remote(2, "Shield", "Egida", "manual"),   // over our unsent correction: refused
-            remote(3, "%str1% Bow", "Arco", "auto"),  // markup lost: refused
-            remote(4, "Axe", "Ascia", "auto"),        // never seen here: kept for later
+            remote(1, "Sword", "Lama", "auto"),      // machine over machine: taken
+            remote(2, "Shield", "Egida", "auto"),    // machine over a hand correction: refused
+            remote(3, "%str1% Bow", "Arco", "auto"), // markup lost: refused
+            remote(4, "Axe", "Ascia", "auto"),       // never seen here: kept for later
         ];
-        assert_eq!(apply(&mut con, &rows, Mark { seq: 9, ..sent }, "seq").unwrap(), 2);
+        assert_eq!(apply(&mut con, &rows, Mark { seq: 9, ..past }, "seq").unwrap(), 2);
         assert_eq!(texts(&con), [
             (1, "Lama".into(), "cloud:Bea".into()),
-            (2, "Scudo nuovo".into(), "editor:Ana".into()),
+            (2, "Scudo".into(), "editor:Ana".into()),
             (4, "Ascia".into(), "cloud:Bea".into()),
         ]);
         assert_eq!(Mark::load(&con, "seq").unwrap().seq, 9);
-        // Received rows never go back; our correction does.
-        let out = pending(&con, Mark::load(&con, "seq").unwrap()).unwrap();
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].row[3], "Scudo nuovo");
-
-        // Once sent, a newer correction from someone else replaces it; a machine one never does.
-        let sent = Mark { seq: 9, at: out[0].at, id: 2, hash: 2, ..Mark::default() };
-        apply(&mut con, &[remote(2, "Shield", "Egida", "manual"), remote(4, "Axe", "Scure", "manual")], sent, "seq").unwrap();
-        apply(&mut con, &[remote(2, "Shield", "Scudetto", "auto")], sent, "seq").unwrap();
-        assert_eq!(texts(&con)[1..], [(2, "Egida".into(), "cloud:Bea".into()), (4, "Scure".into(), "cloud:Bea".into())]);
+        // A hand correction from the server replaces it.
+        apply(&mut con, &[remote(2, "Shield", "Egida", "manual")], past, "seq").unwrap();
+        assert_eq!(texts(&con)[1], (2, "Egida".into(), "cloud:Bea".into()));
     }
 
     #[test]
-    fn what_is_received_can_be_found_and_corrected() {
+    fn the_english_of_what_is_received_is_kept() {
         let mut con = db();
         apply(&mut con, &[remote(4, "Axe", "Ascia", "auto"), remote(1, "Sword", "Lama", "auto")], Mark::default(), "seq").unwrap();
         // The English of a text the game has not shown here is kept; one it has shown is in `strings`.
@@ -643,10 +581,6 @@ mod tests {
             stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
         };
         assert_eq!(kept, [(4, "Axe".to_owned())]);
-        // Corrected in the editor: it goes to the global database, with its English.
-        con.execute("UPDATE translations SET it = 'Scure', status = 'manual', source = 'editor:Ana', at = 50 WHERE id = 4", []).unwrap();
-        let out = pending(&con, Mark { at: 20, id: 2, hash: 2, ..Mark::default() }).unwrap();
-        assert_eq!(out.iter().map(|o| o.row.to_string()).collect::<Vec<_>>(), [r#"[4,"0000000000000004","Axe","Scure","manual"]"#]);
     }
 
     #[test]
@@ -659,108 +593,5 @@ mod tests {
         // Taken out by the server: no longer kept.
         received_names(&mut con, &[], &["Mithril Ore".to_owned()]).unwrap();
         assert_eq!(count(&con), 2);
-    }
-
-    /// Against a running server: cd server && npx wrangler dev, then
-    /// GW2IT_SYNC_URL=http://localhost:8787 cargo test -p gw2it-addon -- --ignored
-    #[test]
-    #[ignore]
-    fn against_server() {
-        let url = std::env::var("GW2IT_SYNC_URL").expect("GW2IT_SYNC_URL");
-        let (_stop_tx, stop) = mpsc::channel();
-        let (mut a, mut b) = (db(), Connection::open_in_memory().unwrap());
-        b.execute_batch(crate::store::SCHEMA).unwrap();
-        b.execute_batch("CREATE TABLE sync_state (k TEXT PRIMARY KEY, v INTEGER NOT NULL);").unwrap();
-        let main = Target { url: &url, token: "", spare: false };
-        cycle(&mut a, main, &stop).unwrap();
-        cycle(&mut b, main, &stop).unwrap();
-        let got = texts(&b);
-        // A's hand correction only: its machine translation stays with A.
-        assert!(!got.iter().any(|r| r.0 == 1), "{got:?}");
-        assert!(got.contains(&(2, "Scudo".into(), "cloud:anonimo".into())), "{got:?}");
-        assert!(pending(&b, Mark::load(&b, "seq").unwrap()).unwrap().is_empty());
-    }
-
-    /// Fallback and nightly copy, end to end. The spare: cd server && echo REPLICA_KEY=test > .dev.vars
-    /// && npx wrangler d1 execute gw2it --local --file schema.sql && npx wrangler dev --port 8788.
-    /// Then: cargo build -p gw2it-server && GW2IT_SPARE_URL=http://localhost:8788
-    /// GW2IT_SERVER_BIN=target/debug/gw2it-server cargo test -p gw2it-addon failover -- --ignored
-    #[test]
-    #[ignore]
-    fn failover() {
-        use std::process::{Child, Command};
-        let spare = std::env::var("GW2IT_SPARE_URL").expect("GW2IT_SPARE_URL");
-        let bin = std::env::var("GW2IT_SERVER_BIN").expect("GW2IT_SERVER_BIN");
-        let dir = std::env::temp_dir().join(format!("gw2it-failover-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let (main_db, key) = (dir.join("main.db"), dir.join("replica.key"));
-        std::fs::write(&key, "test").unwrap();
-        let start_main = || -> Child {
-            let child = Command::new(&bin).args(["--db", main_db.to_str().unwrap(), "--listen", "127.0.0.1:8795"]).spawn().unwrap();
-            thread::sleep(Duration::from_millis(500));
-            child
-        };
-        let replicate = || {
-            let out = Command::new(&bin)
-                .args(["replicate", "--db", main_db.to_str().unwrap(), "--to", &spare, "--key-file", key.to_str().unwrap()])
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-            String::from_utf8_lossy(&out.stdout).into_owned()
-        };
-        let sync = config::Sync {
-            enabled: true,
-            url: "http://127.0.0.1:8795".into(),
-            token: String::new(),
-            fallback_url: spare.clone(),
-            fallback_token: String::new(),
-        };
-        let (_stop_tx, stop) = mpsc::channel();
-        let mut a = db();
-        let mut b = Connection::open_in_memory().unwrap();
-        b.execute_batch(crate::store::SCHEMA).unwrap();
-        b.execute_batch(
-            "CREATE TABLE sync_state (k TEXT PRIMARY KEY, v INTEGER NOT NULL);
-             INSERT INTO strings VALUES (9, 9, 'Nine', 0, 0, 1);
-             INSERT INTO translations VALUES (9, 9, 'Nove', 'manual', 'editor:Bea', 50);",
-        )
-        .unwrap();
-
-        // Main server up: A sends its texts there; at night the spare gets a copy, with the glossary.
-        let mut main = start_main();
-        assert!(!sync_once(&mut a, &sync, &stop).unwrap().1);
-        Connection::open(&main_db)
-            .unwrap()
-            .execute("INSERT INTO glossary VALUES ('failover', 'Passaggio', '[\"Cambio\"]', 'Ana', 1, 1, 2)", [])
-            .unwrap();
-        println!("{}", replicate());
-
-        // Main server down: B falls back to the spare, gets A's texts from the copy, sends its own;
-        // A falls back too and gets B's.
-        main.kill().unwrap();
-        main.wait().unwrap();
-        assert!(sync_once(&mut b, &sync, &stop).unwrap().1);
-        let got = texts(&b);
-        assert!(got.contains(&(2, "Scudo".into(), "cloud:anonimo".into())), "{got:?}");
-        assert!(sync_once(&mut a, &sync, &stop).unwrap().1);
-        assert!(texts(&a).contains(&(9, "Nove".into(), "cloud:anonimo".into())), "{:?}", texts(&a));
-
-        // Main server back: the night copy takes B's text back; everyone is on the main server.
-        let mut main = start_main();
-        let report = replicate();
-        println!("{report}");
-        assert!(report.contains("back 1 translations"), "{report}");
-        assert!(!sync_once(&mut b, &sync, &stop).unwrap().1);
-        let check = Connection::open(&main_db).unwrap();
-        let nine: (String, String) =
-            check.query_row("SELECT it, status FROM translations WHERE id = 9", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
-        // B is no contributor: its hand correction counts as a machine translation (trust levels).
-        assert_eq!(nine, ("Nove".into(), "auto".into()));
-        // The spare no longer holds rows of its own.
-        assert!(replicate().contains("back 0 translations"));
-        main.kill().unwrap();
-        main.wait().unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
