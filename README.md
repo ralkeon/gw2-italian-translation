@@ -12,7 +12,7 @@ attraverso l'addon [Text Translator](https://github.com/ideka/text-translator-pu
 >
 > **Assegna in Nexus un tasto a Show Translated Text** (Text Translator): premilo per vedere al volo
 > il nome originale in inglese, ripremilo per tornare all'italiano. Vale per entrambe le varianti
-> (ibrida e tutto in italiano); l'addon intanto continua a raccogliere e tradurre i testi.
+> (ibrida e tutto in italiano); l'addon intanto continua a ricevere le traduzioni.
 
 > [!WARNING]
 > **Testi che non si aggiornano?** Se un testo resta in inglese anche dopo che è stato tradotto, o se
@@ -26,8 +26,8 @@ attraverso l'addon [Text Translator](https://github.com/ideka/text-translator-pu
 **EN** — Italian Translation is an unofficial, fan-made project. It is not affiliated with or
 endorsed by ArenaNet, NCSoft or Guild Wars 2. Guild Wars 2 and its texts belong to their owners.
 It runs as a Nexus addon on top of Text Translator and does not modify any game file. The
-translations are produced automatically (DeepL, Gemini and other translation services) and may
-contain errors. Use at your own risk.
+translations are produced automatically by AI translation agents and may contain errors. Use at
+your own risk.
 
 *To ArenaNet:* if you see anything here that is a problem and should be removed or changed,
 please contact me (an issue on this repository is fine) and I will take care of it.
@@ -35,8 +35,8 @@ please contact me (an issue on this repository is fine) and I will take care of 
 **IT** — Italian Translation è un progetto amatoriale non ufficiale. Non è affiliato né approvato
 da ArenaNet, NCSoft o Guild Wars 2. Guild Wars 2 e i suoi testi appartengono ai rispettivi
 proprietari. Funziona come addon di Nexus sopra Text Translator e non modifica nessun file del
-gioco. Le traduzioni sono prodotte automaticamente (DeepL, Gemini e altri servizi di traduzione) e
-possono contenere errori. Usalo a tuo rischio.
+gioco. Le traduzioni sono prodotte automaticamente da agenti di traduzione basati su intelligenza
+artificiale e possono contenere errori. Usalo a tuo rischio.
 
 *Ad ArenaNet:* se vedete qualcosa che non va bene e che deve essere rimosso o modificato,
 contattatemi (basta aprire una issue su questo repository) e me ne occuperò io.
@@ -48,10 +48,7 @@ contattatemi (basta aprire una issue su questo repository) e me ne occuperò io.
 - **[Nexus](https://raidcore.gg/Nexus)** di Raidcore, il caricatore di addon.
 - **[Text Translator](https://github.com/ideka/text-translator-public)** di Ideka, da installare con un clic dalla libreria degli addon di Nexus.
 
-Le chiavi API dei traduttori (DeepL, Gemini e gli altri, anche con i piani gratuiti) sono
-facoltative ma **consigliate**: senza, l'addon si appoggia al server del progetto, che ha limiti
-di traduzione giornalieri molto bassi, condivisi con tutti gli altri giocatori. Si inseriscono
-nelle opzioni dell'addon in Nexus.
+Non servono chiavi né account: le traduzioni arrivano già fatte dal database del progetto.
 
 ## Installazione
 
@@ -62,27 +59,28 @@ nelle opzioni dell'addon in Nexus.
    **Italian Translation** (se non lo sono già).
 
 Al primo avvio l'addon installa da solo il suo modulo in Text Translator e lo sceglie come modulo
-attivo. Dopo qualche secondo (il tempo del primo scambio con il database globale, che porta le
-traduzioni già fatte dagli altri) i testi compaiono in italiano. La finestra dell'addon si apre
-con `ALT+SHIFT+I`.
+attivo. Dopo qualche secondo (il tempo del primo scambio con il database del progetto, che porta
+tutte le traduzioni già pronte) i testi compaiono in italiano. La finestra dell'addon si apre con
+`ALT+SHIFT+I`.
 
 Se i testi restano in inglese:
 - riavvia il gioco una volta (o scegli **Italian Translation** tra i moduli di Text Translator);
 - nelle opzioni di Text Translator controlla che **Show Translated Text** sia attivo e
   **Pause Refreshes** spento: con i refresh in pausa le nuove traduzioni si applicano solo con un
   refresh manuale. Spegnendo Show Translated Text (anche con il tasto assegnato in Nexus) il gioco
-  torna in inglese, ma l'addon continua a raccogliere e tradurre i testi in background.
+  torna in inglese, ma l'addon continua a ricevere le traduzioni in background.
 
 ## Come funziona
 
-- I testi arrivano dal gioco tramite Text Translator e vengono tradotti dal server del progetto,
-  oppure con le tue chiavi, se le inserisci nelle opzioni dell'addon in Nexus (tutte facoltative,
-  con piani gratuiti): DeepL, Gemini, Azure Translator e altri modelli linguistici (Groq,
-  Cerebras, OpenRouter, Mistral) quando i precedenti finiscono la quota o non rispondono.
-- Le traduzioni restano sul tuo PC (`strings.db`): ogni testo si traduce una volta sola.
-- Ogni 2 minuti le traduzioni nuove vanno su un database globale e arrivano quelle degli altri
-  giocatori: chi trova per primo un testo lo traduce per tutti. Le traduzioni fatte dal server
-  hanno la precedenza su quelle automatiche degli altri addon.
+- Le traduzioni sono fatte sul server del progetto da agenti di traduzione, che lavorano su tutti
+  i testi del gioco (anche quelli che nessuno ha ancora visto) con le stesse regole e lo stesso
+  glossario, confrontandoli con le versioni ufficiali in francese, tedesco e spagnolo e con Guild
+  Wars 1. Ogni notte il server legge i testi nuovi delle patch e li mette in coda.
+- Ogni 2 minuti l'addon scarica le traduzioni nuove o corrette e le mostra subito in gioco. Le
+  tiene sul tuo PC (`strings.db`). L'addon non traduce niente da sé e non invia niente.
+- Un testo non ancora tradotto resta in inglese finché la sua traduzione non arriva.
+- Le frasi che cambiano con il genere del tuo personaggio (o di un PNG) usano la forma giusta:
+  "Benvenuto" o "Benvenuta", "Bambino" o "Bambina".
 
 ### Ibrida o tutto in italiano
 
@@ -99,8 +97,8 @@ italiano: Nexus → opzioni di **Italian Translation** → casella **Tutto in it
 Il cambio vale subito, senza riavviare.
 
 Impostazioni e traduzioni stanno in `Guild Wars 2/addons/italian_translation/`
-(`config.toml` e `strings.db`). Per non condividere le traduzioni con il database globale metti
-`enabled = false` nella sezione `[sync]` di `config.toml`.
+(`config.toml` e `strings.db`). Le chiavi dei traduttori delle versioni precedenti non servono più
+e vengono tolte da `config.toml`.
 
 ## Stato del progetto
 
