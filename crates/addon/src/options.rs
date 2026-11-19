@@ -48,16 +48,40 @@ pub fn render(ui: &Ui) {
     tips(ui);
 }
 
-/// A button to the project's Ko-fi page, opened in the default browser.
+/// Ko-fi's cup (from its own button), drawn inside ours.
+const KOFI_ICON: &[u8] = include_bytes!("../assets/kofi-cup.png");
+
+/// On the right, as other addons do: "Se l'addon ti piace" and a button to the project's Ko-fi page with
+/// Ko-fi's cup, opened in the default browser.
 fn tips(ui: &Ui) {
+    const NOTE: &str = "Se l'addon ti piace";
+    const LABEL: &str = "Supportami su Ko-fi";
+    let pad = ui.clone_style().frame_padding[0];
+    let height = ui.frame_height();
+    let icon = [height * 0.8 * 64.0 / 56.0, height * 0.8];
+    let text = ui.calc_text_size(LABEL);
+    let width = pad + icon[0] + pad * 0.75 + text[0] + pad;
+    let note = ui.calc_text_size(NOTE)[0];
+    let spacing = ui.clone_style().item_spacing[0];
+    let [x, y] = ui.cursor_pos();
+    let free = ui.content_region_avail()[0] - (note + spacing + width);
+    ui.set_cursor_pos([x + free.max(0.0), y]);
+    ui.align_text_to_frame_padding();
+    ui.text_disabled(NOTE);
+    ui.same_line();
     let clicked = {
         let _button = ui.push_style_color(StyleColor::Button, KOFI);
         let _hovered = ui.push_style_color(StyleColor::ButtonHovered, KOFI_HOVER);
         let _active = ui.push_style_color(StyleColor::ButtonActive, KOFI);
-        ui.button("Supportami su Ko-fi")
+        ui.button_with_size("##kofi", [width, height])
     };
-    ui.same_line();
-    ui.text_disabled("Se l'addon ti piace, puoi offrirmi un caffè.");
+    let [left, top] = ui.item_rect_min();
+    let draw = ui.get_window_draw_list();
+    if let Some(cup) = nexus::texture::get_texture_or_create_from_memory("GW2IT_KOFI_CUP", KOFI_ICON) {
+        let at = [left + pad, top + (height - icon[1]) / 2.0];
+        draw.add_image(cup.id(), at, [at[0] + icon[0], at[1] + icon[1]]).build();
+    }
+    draw.add_text([left + pad + icon[0] + pad * 0.75, top + (height - text[1]) / 2.0], [1.0, 1.0, 1.0, 1.0], LABEL);
     if clicked {
         // Off the render thread: ShellExecute may take a moment to start the browser.
         std::thread::spawn(|| open_url(KOFI_URL));
