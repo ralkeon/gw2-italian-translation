@@ -340,7 +340,7 @@ checksum = "627003914c6057c9c8f0832ee4f870b5a4f599d0cfa83f4072675114860cd0ff"
 
 [[package]]
 name = "gw2it-addon"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "gw2it-proto",
  "gw2it-text",
@@ -356,11 +356,11 @@ dependencies = [
 
 [[package]]
 name = "gw2it-proto"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "gw2it-server"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "bitcode",
  "getrandom 0.4.3",
@@ -377,7 +377,7 @@ dependencies = [
 
 [[package]]
 name = "gw2it-shim"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "gw2it-proto",
  "windows-sys 0.60.2",
@@ -385,11 +385,11 @@ dependencies = [
 
 [[package]]
 name = "gw2it-text"
-version = "0.4.0"
+version = "0.4.1"
 
 [[package]]
 name = "gw2it-translate"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "gw2it-text",
  "log",
