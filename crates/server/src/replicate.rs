@@ -9,6 +9,9 @@
 //!
 //! Afterwards the spare holds this server's rows with this server's seq: an addon that falls back
 //! to it carries on from the seq it had here.
+//!
+//! `frozen` (the database holds the agents' rows only, owner 2026-11-19): step 1 takes back the users
+//! alone; the translations, terms and history written on the spare are dropped by step 2.
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -24,7 +27,7 @@ const CHUNK: usize = 300;
 /// Users registered on the spare are looked for this far before the last run.
 const MARGIN_MS: i64 = 3_600_000;
 
-pub fn run(mut con: Connection, to: &str, key: &str) -> Result<(), String> {
+pub fn run(mut con: Connection, to: &str, key: &str, frozen: bool) -> Result<(), String> {
     let db = |e: rusqlite::Error| format!("database: {e}");
     con.execute_batch("CREATE TABLE IF NOT EXISTS replica_state (k TEXT PRIMARY KEY, v INTEGER NOT NULL);")
         .map_err(db)?;
@@ -52,6 +55,10 @@ pub fn run(mut con: Connection, to: &str, key: &str) -> Result<(), String> {
                         params![u[0].as_str(), u[1].as_str(), u[2].as_i64(), u[3].as_i64(), u[4].as_i64().unwrap_or(0)],
                     )
                     .map_err(db)?;
+            }
+            if frozen {
+                tx.commit().map_err(db)?;
+                break;
             }
             for h in list(&reply, "history") {
                 tx.execute(

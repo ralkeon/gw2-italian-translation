@@ -249,7 +249,9 @@ fn main() {
             eprintln!("cannot open {db}: {e}");
             std::process::exit(1);
         });
-        if let Err(e) = replicate::run(con, to.trim_end_matches('/'), key.trim()) {
+        // Frozen (the rows are the agents' only): nothing written on the spare comes back but its users.
+        let frozen = frozen || std::path::Path::new(&format!("{db}.frozen")).exists();
+        if let Err(e) = replicate::run(con, to.trim_end_matches('/'), key.trim(), frozen) {
             eprintln!("replicate: {e}");
             std::process::exit(1);
         }
