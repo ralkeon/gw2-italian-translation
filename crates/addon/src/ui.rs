@@ -1,5 +1,5 @@
-//! In-game window (ALT+SHIFT+I): status and, for contributors, the translation editor. The keys
-//! are in the addon's options in Nexus (options.rs).
+//! In-game window (ALT+SHIFT+I): status and, for contributors, the translation editor. The
+//! variant is in the addon's options in Nexus (options.rs).
 
 use std::{
     sync::{
@@ -16,7 +16,6 @@ use crate::{
     config, markup,
     state::SHARED,
     store::{self, Row},
-    translate::{self, Job},
 };
 
 static OPEN: AtomicBool = AtomicBool::new(false);
@@ -91,7 +90,8 @@ fn status(ui: &Ui) {
         if crate::install::refreshes_paused() {
             ui.text_colored([0.95, 0.75, 0.3, 1.0], "Attenzione: Pause Refreshes è attivo");
             ui.text_wrapped(
-                "Pause Refreshes di Text Translator è attivo: i testi già a schermo non si aggiornano              (traduzioni nuove, tasto di Show Translated Text). Spegnilo nelle opzioni di Text Translator in Nexus.",
+                "Pause Refreshes di Text Translator è attivo: i testi già a schermo non si aggiornano \
+                 (traduzioni nuove, tasto di Show Translated Text). Spegnilo nelle opzioni di Text Translator in Nexus.",
             );
         }
     } else {
@@ -101,21 +101,11 @@ fn status(ui: &Ui) {
         );
     }
     ui.text(format!(
-        "Richieste in questa sessione: {}   Testi in archivio: {}",
+        "Richieste in questa sessione: {}   Testi visti: {}   Traduzioni: {}",
         SHARED.received.load(Ordering::Relaxed),
         SHARED.stored.load(Ordering::Relaxed),
-    ));
-    let status = SHARED.status.lock().map(|s| s.clone()).unwrap_or_default();
-    ui.text(format!("Traduzione: {status}"));
-    ui.text(format!(
-        "Tradotti: {}   In coda: {}   Scartati: {}",
         SHARED.translated.load(Ordering::Relaxed),
-        SHARED.queued.load(Ordering::Relaxed),
-        SHARED.rejected.load(Ordering::Relaxed),
     ));
-    if let Some((used, limit)) = SHARED.usage.lock().ok().and_then(|u| *u) {
-        ui.text(format!("DeepL questo mese: {used} / {limit} caratteri"));
-    }
     if let Ok(sync) = SHARED.sync.lock() {
         let when = match sync.at {
             Some(at) if at.elapsed().as_secs() < 60 => ", ultima adesso".to_owned(),
@@ -192,18 +182,11 @@ fn editor(ui: &Ui, state: &mut State, user: &str) {
     if mismatch.is_empty() && !empty {
         if ui.button("Salva") {
             let it = markup::straight_quotes(&state.edit);
-            store::save_manual(row.id, row.hash, &row.en, it.clone(), user);
+            store::save_manual(row.id, row.hash, it.clone(), user);
             update_row(state, row.id, row.hash, Some(it), Some("manual"));
         }
     } else {
         ui.text_disabled("Salva");
-    }
-    ui.same_line();
-    if ui.button("Ritraduci") {
-        store::forget(row.id, row.hash);
-        translate::request(Job { id: row.id, hash: row.hash, en: row.en.clone(), force: true });
-        update_row(state, row.id, row.hash, None, None);
-        state.edit.clear();
     }
     ui.same_line();
     if ui.button("Chiudi") {

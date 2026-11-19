@@ -34,7 +34,6 @@ use crate::{
     cache, install,
     state::SHARED,
     store::{self, Seen},
-    translate::{self, Job},
 };
 
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -141,13 +140,6 @@ fn session(req_name: &str, rep_name: &str) -> io::Result<()> {
     log::info!("shim connected");
     install::module_works();
     cache::connected();
-    let repaired = store::take_repaired();
-    for (id, hash, it) in &repaired {
-        send_text(*id, *hash, &store::shown(*id, *hash).unwrap_or_else(|| it.clone()));
-    }
-    if !repaired.is_empty() {
-        log::info!("{} repaired translations sent to the game", repaired.len());
-    }
 
     let mut input = BufReader::new(File::from(requests));
     loop {
@@ -166,11 +158,9 @@ fn session(req_name: &str, rep_name: &str) -> io::Result<()> {
 
 fn on_text(id: u32, hash: u64, text: String) {
     SHARED.received.fetch_add(1, Ordering::Relaxed);
-    match store::shown(id, hash) {
-        Some(it) => {
-            send_text(id, hash, &it);
-        }
-        None => translate::request(Job { id, hash, en: text.clone(), force: false }),
+    // A text with no translation yet stays English: the agents' row comes with a later sync.
+    if let Some(it) = store::shown(id, hash) {
+        send_text(id, hash, &it);
     }
     store::record(Seen { id, hash, text, at_ms: store::now_ms() });
 }

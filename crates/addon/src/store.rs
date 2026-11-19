@@ -17,13 +17,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use gw2it_text::{
-    glossary::{self, Learned, Term},
-    names::Names,
-};
+use gw2it_text::names::Names;
 use rusqlite::{Connection, named_params, params};
 
-use crate::{cache, config, markup, pipe, plural, state::SHARED, translate::Job};
+use crate::{cache, config, markup, pipe, plural, state::SHARED};
 
 pub struct Seen {
     pub id: u32,
@@ -31,17 +28,6 @@ pub struct Seen {
     pub text: String,
     /// Unix time in ms when it arrived: texts arriving together usually belong together.
     pub at_ms: i64,
-}
-
-pub struct Translated {
-    pub id: u32,
-    pub hash: u64,
-    pub it: String,
-    /// Who made it: "deepl", "gemini", "server:deepl"...
-    pub source: String,
-    /// Made by the project's server: its signature and the XML it answered, which the global
-    /// database checks to tell the server's translations from the ones an addon makes up.
-    pub proof: Option<(String, String)>,
 }
 
 /// A text as the editor shows it.
@@ -57,12 +43,7 @@ pub struct Row {
 
 enum Msg {
     Seen(Seen),
-    Translated(Translated),
     Manual { id: u32, hash: u64, it: String, author: String },
-    Forget { id: u32, hash: u64 },
-    /// A term of the glossary, new or changed: saved whole, and the machine translations that
-    /// have it wrong are repaired.
-    Term(Term, Origin),
     Search { query: String, exact: bool, reply: Sender<Vec<Row>> },
     /// The variant changed (set_full_mode): the texts seen here that differ are sent again.
     Resend,
@@ -73,30 +54,12 @@ static WORKER: Mutex<Option<(Sender<Msg>, JoinHandle<()>)>> = Mutex::new(None);
 /// (id, hash of the English) -> Italian.
 static TRANSLATIONS: Mutex<Option<HashMap<(u32, u64), String>>> = Mutex::new(None);
 
-/// Hash of the English -> Italian, and whether it is a hand correction: the same English under
-/// another ID (ten "Torch" items) takes the translation it already has instead of asking for a new
-/// one. The general one: a hand correction if there is one, the text most of them have (a hand
-/// correction goes to all the machine translations: one that differs later is for its own context),
-/// else the newest machine translation; as server/sql/same.sql chooses.
-static SAME: Mutex<Option<HashMap<u64, (String, bool)>>> = Mutex::new(None);
-
 /// (id, hash of the English) -> the all-Italian variant's Italian, where it differs from the hybrid
 /// one (the table `full`, from the global database).
 static FULL: Mutex<Option<HashMap<(u32, u64), String>>> = Mutex::new(None);
 
 /// The option "Tutto in italiano" (config.full_italian): the game is answered from FULL first.
 static FULL_MODE: AtomicBool = AtomicBool::new(false);
-
-/// Every translation, the general one of each English (SAME) after the others.
-const LOAD: &str = "SELECT id, hash, it, status = 'manual' AS manual FROM translations
-    ORDER BY manual, CASE WHEN manual THEN count(*) OVER (PARTITION BY hash, it, status) END, at";
-
-/// Translations repaired at start-up: Text Translator still has the old ones in its cache, so they
-/// are sent to the game when the shim connects.
-static REPAIRED: Mutex<Vec<(u32, u64, String)>> = Mutex::new(Vec::new());
-
-/// What the corrections taught (gw2it_text::glossary), also in the glossary table.
-static GLOSSARY: Mutex<Vec<Term>> = Mutex::new(Vec::new());
 
 /// The names that stay in English (gw2it_text::names), from the global database: a text that is
 /// one is not translated.
@@ -184,15 +147,12 @@ pub fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
-/// Opens the database and returns the texts that still have no translation, oldest first
-/// (Text Translator asks for a text once per session: the ones lost to an error or a reload would
-/// otherwise stay English until the game restarts).
-pub fn start(path: &Path) -> rusqlite::Result<Vec<Job>> {
+/// Opens the database. The translations are kept as they came from the project's database: never
+/// changed here (no glossary, no repair), only the hand corrections of a contributor's editor.
+pub fn start(path: &Path) -> rusqlite::Result<()> {
     let con = Connection::open(path)?;
     con.execute_batch(SCHEMA)?;
-    *GLOSSARY.lock().unwrap() = load_glossary(&con)?;
     load_names(&con)?;
-    repair_auto(&con)?;
     // Where it is already there, or a contributor asked for it ("save_map" in contributor.json): a
     // local tool, not something the addon hands out.
     let map = path.with_file_name("map_it.db");
@@ -204,21 +164,13 @@ pub fn start(path: &Path) -> rusqlite::Result<Vec<Job>> {
     let count: i64 = con.query_row("SELECT count(*) FROM strings", [], |r| r.get(0))?;
     SHARED.stored.store(count as u64, Ordering::Relaxed);
 
-    let (mut map, mut same) = (HashMap::new(), HashMap::new());
-    {
-        let mut stmt = con.prepare(LOAD)?;
-        let rows = stmt.query_map([], |r| {
-            Ok(((r.get::<_, u32>(0)?, r.get::<_, i64>(1)? as u64), r.get::<_, String>(2)?, r.get::<_, bool>(3)?))
-        })?;
-        for row in rows {
-            let (key, it, manual) = row?;
-            same.insert(key.1, (it.clone(), manual));
-            map.insert(key, it);
-        }
-    }
+    let map: HashMap<(u32, u64), String> = {
+        let mut stmt = con.prepare("SELECT id, hash, it FROM translations")?;
+        stmt.query_map([], |r| Ok(((r.get::<_, u32>(0)?, r.get::<_, i64>(1)? as u64), r.get::<_, String>(2)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
     SHARED.translated.store(map.len() as u64, Ordering::Relaxed);
     *TRANSLATIONS.lock().unwrap() = Some(map);
-    *SAME.lock().unwrap() = Some(same);
     let full: HashMap<(u32, u64), String> = {
         let mut stmt = con.prepare("SELECT id, hash, it FROM full WHERE it <> ''")?;
         stmt.query_map([], |r| Ok(((r.get::<_, u32>(0)?, r.get::<_, i64>(1)? as u64), r.get::<_, String>(2)?)))?
@@ -227,15 +179,6 @@ pub fn start(path: &Path) -> rusqlite::Result<Vec<Job>> {
     *FULL.lock().unwrap() = Some(full);
     FULL_MODE.store(config::get().full_italian, Ordering::Relaxed);
 
-    let backlog = {
-        let mut stmt = con.prepare(
-            "SELECT s.id, s.hash, s.en FROM strings s
-             LEFT JOIN translations t ON t.id = s.id AND t.hash = s.hash
-             WHERE t.id IS NULL ORDER BY s.first_seen",
-        )?;
-        stmt.query_map([], |r| Ok(Job { id: r.get(0)?, hash: r.get::<_, i64>(1)? as u64, en: r.get(2)?, force: false }))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
     let watch = Watch::new(&con)?;
 
     let (tx, rx) = mpsc::channel();
@@ -244,21 +187,7 @@ pub fn start(path: &Path) -> rusqlite::Result<Vec<Job>> {
         .spawn(move || run(con, watch, &rx))
         .expect("spawn store thread");
     *WORKER.lock().unwrap() = Some((tx, handle));
-    Ok(backlog)
-}
-
-fn load_glossary(con: &Connection) -> rusqlite::Result<Vec<Term>> {
-    let mut stmt = con.prepare("SELECT en, wrong, it FROM glossary ORDER BY en, at")?;
-    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
-    let mut terms: Vec<Term> = Vec::new();
-    for row in rows {
-        let (en, wrong, it) = row?;
-        match terms.last_mut().filter(|t| t.en == en) {
-            Some(term) => term.wrong.push(wrong),
-            None => terms.push(Term { en, it, wrong: vec![wrong] }),
-        }
-    }
-    Ok(terms)
+    Ok(())
 }
 
 /// Reads the names that stay in English again (sync.rs saves the new ones in the table).
@@ -266,91 +195,6 @@ pub fn load_names(con: &Connection) -> rusqlite::Result<()> {
     let mut stmt = con.prepare("SELECT name FROM english_names")?;
     let list: Vec<String> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
     *NAMES.lock().unwrap() = Some(Names::new(list));
-    Ok(())
-}
-
-/// The name that stays in English the whole of `en` is, if it is one.
-pub fn english_name(en: &str) -> Option<String> {
-    NAMES.lock().ok()?.as_ref()?.whole(en)
-}
-
-/// The glossary as it is now.
-pub fn glossary() -> Vec<Term> {
-    GLOSSARY.lock().map(|g| g.clone()).unwrap_or_default()
-}
-
-/// Adds what a correction taught to the glossary (in memory now, on disk and in the texts already
-/// translated with the next batch). An English word keeps one Italian: a later correction of the
-/// same word replaces it, and the earlier one becomes a wrong form.
-fn learn(l: Learned) {
-    let said = Term { en: l.en, it: l.it, wrong: vec![l.wrong] };
-    let Ok(mut terms) = GLOSSARY.lock() else {
-        return;
-    };
-    // Here the contributor decides at once; the global database says the last word (sync.rs).
-    let i = terms.iter().position(|t| t.en == said.en);
-    let Some(term) = glossary::merge(i.map(|i| (&terms[i], 0)), &said, 0) else {
-        return;
-    };
-    match i {
-        Some(i) => terms[i] = term.clone(),
-        None => terms.push(term.clone()),
-    }
-    drop(terms);
-    send(Msg::Term(term, Origin::Local));
-}
-
-/// Where a term of the glossary comes from.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Origin {
-    /// Learned from a correction made here: sync.rs sends it to the global database.
-    Local,
-    /// Received from it.
-    Cloud,
-}
-
-/// The terms of the global glossary that are new or changed here: kept, and used at once (the
-/// machine translations that have them wrong are repaired). Not sent back.
-pub fn receive_terms(received: Vec<Term>) {
-    let Ok(mut terms) = GLOSSARY.lock() else {
-        return;
-    };
-    for term in received {
-        match terms.iter().position(|t| t.en == term.en) {
-            Some(i) if terms[i] == term => continue,
-            Some(i) => terms[i] = term.clone(),
-            None => terms.push(term.clone()),
-        }
-        send(Msg::Term(term, Origin::Cloud));
-    }
-}
-
-/// Machine translations saved by earlier versions are repaired from the English they translate:
-/// plural marks (see plural.rs), the spaces a translator dropped next to tokens and the glossary.
-/// Hand corrections are left as they are.
-fn repair_auto(con: &Connection) -> rusqlite::Result<()> {
-    let terms = glossary();
-    let rows: Vec<(u32, i64, String, String)> = {
-        let mut stmt = con.prepare(
-            "SELECT t.id, t.hash, s.en, t.it FROM translations t
-             JOIN strings s ON s.id = t.id AND s.hash = t.hash
-             WHERE t.status = 'auto'",
-        )?;
-        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?
-    };
-    let mut done = 0;
-    let mut update = con.prepare("UPDATE translations SET it = ?3, at = ?4 WHERE id = ?1 AND hash = ?2")?;
-    for (id, hash, en, it) in rows {
-        let fixed = plural::pluralize(&en, &glossary::fix(&en, &markup::repair(&en, &markup::fix_spacing(&en, &it)), &terms));
-        if fixed != it {
-            update.execute(params![id, hash, fixed, now_ms()])?;
-            REPAIRED.lock().unwrap().push((id, hash as u64, fixed));
-            done += 1;
-        }
-    }
-    if done > 0 {
-        log::info!("{done} translations repaired (plurals, spacing)");
-    }
     Ok(())
 }
 
@@ -552,11 +396,6 @@ fn map_refresh_all(con: &mut Connection, keys: &[(u32, u64)]) {
     }
 }
 
-/// The translations repaired at start-up, once: to be sent to the game.
-pub fn take_repaired() -> Vec<(u32, u64, String)> {
-    std::mem::take(&mut *REPAIRED.lock().unwrap())
-}
-
 /// The saved translation, if any.
 pub fn lookup(id: u32, hash: u64) -> Option<String> {
     TRANSLATIONS.lock().ok()?.as_ref()?.get(&(id, hash)).cloned()
@@ -586,45 +425,17 @@ pub fn full_count() -> usize {
     FULL.lock().ok().and_then(|f| f.as_ref().map(HashMap::len)).unwrap_or(0)
 }
 
-/// The translation of the same English under any ID (`hash` is the hash of the English).
-pub fn lookup_same(hash: u64) -> Option<String> {
-    Some(SAME.lock().ok()?.as_ref()?.get(&hash)?.0.clone())
-}
-
 /// Queues a text for saving; dropped silently if the store is not running.
 pub fn record(seen: Seen) {
     send(Msg::Seen(seen));
 }
 
-/// Keeps a new machine translation (in memory now, on disk with the next batch).
-pub fn save_translation(t: Translated) {
-    remember(t.id, t.hash, &t.it, false);
-    send(Msg::Translated(t));
-}
-
-/// Keeps a hand correction and shows it in the game right away. Never overwritten by a machine.
-/// If it fixed a name (the one that was there had it wrong), the glossary learns it: `en` is the
-/// English text.
-pub fn save_manual(id: u32, hash: u64, en: &str, it: String, author: &str) {
-    if let Some(old) = lookup(id, hash) {
-        if let Some(learned) = glossary::learn(en, &old, &it) {
-            log::info!("glossary: {} = {} (was {})", learned.en, learned.it, learned.wrong);
-            learn(learned);
-        }
-    }
-    remember(id, hash, &it, true);
+/// Keeps a hand correction and shows it in the game right away. Never overwritten by a row of the
+/// project's database.
+pub fn save_manual(id: u32, hash: u64, it: String, author: &str) {
+    remember(id, hash, &it);
     pipe::send_text(id, hash, &it);
     send(Msg::Manual { id, hash, it, author: author.to_owned() });
-}
-
-/// Drops a translation (of any kind), to have it made again.
-pub fn forget(id: u32, hash: u64) {
-    if let Ok(mut map) = TRANSLATIONS.lock() {
-        if map.as_mut().and_then(|m| m.remove(&(id, hash))).is_some() {
-            SHARED.translated.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
-    send(Msg::Forget { id, hash });
 }
 
 /// Texts whose English or Italian contains `query`, or whose ID is `query`; the most recently
@@ -636,23 +447,11 @@ pub fn search(query: String, exact: bool) -> Receiver<Vec<Row>> {
     rx
 }
 
-/// `manual`: a hand correction. It becomes the general translation of its English (SAME) if there
-/// is none by hand yet, or if it corrects that one.
-fn remember(id: u32, hash: u64, it: &str, manual: bool) {
-    let mut old = None;
+fn remember(id: u32, hash: u64, it: &str) {
     if let Ok(mut map) = TRANSLATIONS.lock() {
         if let Some(map) = map.as_mut() {
-            old = map.insert((id, hash), it.to_owned());
-            if old.is_none() {
+            if map.insert((id, hash), it.to_owned()).is_none() {
                 SHARED.translated.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-    if let Ok(mut same) = SAME.lock() {
-        if let Some(same) = same.as_mut() {
-            let general = same.get(&hash);
-            if general.is_none_or(|(text, by_hand)| !by_hand || old.as_ref() == Some(text)) {
-                same.insert(hash, (it.to_owned(), manual));
             }
         }
     }
@@ -673,7 +472,6 @@ pub fn stop() {
         let _ = handle.join();
     }
     *TRANSLATIONS.lock().unwrap() = None;
-    *SAME.lock().unwrap() = None;
 }
 
 fn run(mut con: Connection, mut watch: Watch, rx: &Receiver<Msg>) {
@@ -743,12 +541,6 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
              ON CONFLICT (id, hash) DO UPDATE SET last_seen = excluded.last_seen, seen = seen + 1
              RETURNING seen",
         )?;
-        let mut auto_stmt = tx.prepare_cached(
-            "INSERT INTO translations (id, hash, it, status, source, at) VALUES (?1, ?2, ?3, 'auto', ?4, ?5)
-             ON CONFLICT (id, hash) DO UPDATE SET it = excluded.it, status = excluded.status,
-                 source = excluded.source, at = excluded.at
-             WHERE translations.status <> 'manual'",
-        )?;
         let mut manual_stmt = tx.prepare_cached(
             "INSERT INTO translations (id, hash, it, status, source, at) VALUES (?1, ?2, ?3, 'manual', ?4, ?5)
              ON CONFLICT (id, hash) DO UPDATE SET it = excluded.it, status = excluded.status,
@@ -760,9 +552,6 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
             "UPDATE translations SET it = ?3, status = 'manual', source = ?4, at = ?5
              WHERE hash = ?2 AND id <> ?1 AND status = 'auto' AND it <> ?3 RETURNING id",
         )?;
-        let mut forget_stmt = tx.prepare_cached("DELETE FROM translations WHERE id = ?1 AND hash = ?2")?;
-        let mut proof_stmt = tx.prepare_cached("INSERT OR REPLACE INTO proofs (id, hash, sig, raw) VALUES (?1, ?2, ?3, ?4)")?;
-        let mut forget_proof_stmt = tx.prepare_cached("DELETE FROM proofs WHERE id = ?1 AND hash = ?2")?;
         for m in batch {
             match m {
                 Msg::Seen(s) => {
@@ -772,14 +561,6 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
                         touched.push((s.id, s.hash));
                     }
                 }
-                Msg::Translated(t) => {
-                    auto_stmt.execute(params![t.id, t.hash as i64, t.it, t.source, now_ms()])?;
-                    match &t.proof {
-                        Some((sig, raw)) => proof_stmt.execute(params![t.id, t.hash as i64, sig, raw])?,
-                        None => forget_proof_stmt.execute(params![t.id, t.hash as i64])?,
-                    };
-                    touched.push((t.id, t.hash));
-                }
                 Msg::Manual { id, hash, it, author } => {
                     let (source, now) = (format!("editor:{author}"), now_ms());
                     manual_stmt.execute(params![id, hash as i64, it, source, now])?;
@@ -788,19 +569,7 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
                         same_stmt.query_map(params![id, hash as i64, it, source, now], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
                     for other in others {
                         touched.push((other, hash));
-                        repaired.push((other, hash, it.clone(), true));
-                    }
-                }
-                Msg::Forget { id, hash } => {
-                    forget_stmt.execute(params![id, hash as i64])?;
-                    forget_proof_stmt.execute(params![id, hash as i64])?;
-                    touched.push((id, hash));
-                }
-                Msg::Term(term, origin) => {
-                    save_term(&tx, &term, origin)?;
-                    for (id, hash, it) in repair_with(&tx, &term)? {
-                        touched.push((id, hash));
-                        repaired.push((id, hash, it, false));
+                        repaired.push((other, hash, it.clone()));
                     }
                 }
                 Msg::Search { query, exact, reply } => searches.push((query, exact, reply)),
@@ -826,53 +595,12 @@ fn save(con: &mut Connection, batch: Vec<Msg>) -> rusqlite::Result<Vec<(String, 
     }
     SHARED.stored.fetch_add(added, Ordering::Relaxed);
     map_refresh_all(con, &touched);
-    // Machine translations the glossary or a hand correction of the same English fixed: the game
-    // shows the corrected ones from now on.
-    for (id, hash, it, manual) in repaired {
-        remember(id, hash, &it, manual);
+    // The other IDs of the same English that took a hand correction: the game shows it from now on.
+    for (id, hash, it) in repaired {
+        remember(id, hash, &it);
         pipe::send_text(id, hash, &shown(id, hash).unwrap_or(it));
     }
     Ok(searches)
-}
-
-/// A term of the glossary, as one row per wrong form.
-fn save_term(tx: &Connection, term: &Term, origin: Origin) -> rusqlite::Result<()> {
-    tx.prepare_cached("DELETE FROM glossary WHERE en = ?1")?.execute([&term.en])?;
-    let mut insert = tx.prepare_cached("INSERT INTO glossary (en, wrong, it, at, local) VALUES (?1, ?2, ?3, ?4, ?5)")?;
-    for wrong in &term.wrong {
-        insert.execute(params![term.en, wrong, term.it, now_ms(), origin == Origin::Local])?;
-    }
-    Ok(())
-}
-
-/// Fixes the machine translations of texts with the English word of `term` that have it wrong.
-/// Returns them. Not the hand corrections; not the server's proof of a text it made, which no
-/// longer matches.
-fn repair_with(tx: &Connection, term: &Term) -> rusqlite::Result<Vec<(u32, u64, String)>> {
-    let pattern = format!("%{}%", term.en.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
-    let rows: Vec<(u32, i64, String, String)> = {
-        let mut stmt = tx.prepare_cached(
-            "SELECT t.id, t.hash, s.en, t.it FROM translations t
-             JOIN strings s ON s.id = t.id AND s.hash = t.hash
-             WHERE t.status = 'auto' AND s.en LIKE ?1 ESCAPE '\\'",
-        )?;
-        stmt.query_map([pattern], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?
-    };
-    let mut update = tx.prepare_cached("UPDATE translations SET it = ?3, at = ?4 WHERE id = ?1 AND hash = ?2")?;
-    let mut forget_proof = tx.prepare_cached("DELETE FROM proofs WHERE id = ?1 AND hash = ?2")?;
-    let mut fixed = Vec::new();
-    for (id, hash, en, it) in rows {
-        let new = glossary::fix(&en, &it, std::slice::from_ref(term));
-        if new != it {
-            update.execute(params![id, hash, new, now_ms()])?;
-            forget_proof.execute(params![id, hash])?;
-            fixed.push((id, hash as u64, new));
-        }
-    }
-    if !fixed.is_empty() {
-        log::info!("glossary: {} translations fixed for {}", fixed.len(), term.en);
-    }
-    Ok(fixed)
 }
 
 fn find(con: &Connection, query: &str, exact: bool) -> rusqlite::Result<Vec<Row>> {
@@ -957,7 +685,7 @@ impl Watch {
         // of it, so the new one is sent; the others are answered from memory when asked for.
         let mut stmt = con.prepare_cached(
             "SELECT t.id, t.hash, t.it, t.at, t.source,
-                    EXISTS (SELECT 1 FROM strings s WHERE s.id = t.id AND s.hash = t.hash), t.status = 'manual'
+                    EXISTS (SELECT 1 FROM strings s WHERE s.id = t.id AND s.hash = t.hash)
              FROM translations t WHERE t.at > ?1 ORDER BY t.at",
         )?;
         let rows = stmt.query_map([self.last_at], |r| {
@@ -968,11 +696,10 @@ impl Watch {
                 r.get::<_, i64>(3)?,
                 r.get::<_, String>(4)?,
                 r.get::<_, bool>(5)?,
-                r.get::<_, bool>(6)?,
             ))
         })?;
         for row in rows {
-            let (id, hash, it, at, source, seen, manual) = row?;
+            let (id, hash, it, at, source, seen) = row?;
             self.last_at = self.last_at.max(at);
             if lookup(id, hash).as_deref() != Some(it.as_str()) {
                 // From the global database (sync.rs): thousands at the first sync, not logged.
@@ -982,7 +709,7 @@ impl Watch {
                 if let Err(e) = map_refresh(con, id, hash) {
                     log::error!("map_it.db: {e}");
                 }
-                remember(id, hash, &it, manual);
+                remember(id, hash, &it);
                 // Also a text not seen here: Text Translator's cache holds it or lacks it (cache.rs).
                 if seen || cache::wanted(id, hash) {
                     pipe::send_text(id, hash, &shown(id, hash).unwrap_or(it));
@@ -1057,53 +784,6 @@ mod tests {
                 (4, "Fiaccole".into(), "auto".into(), "deepl".into()),
             ]
         );
-    }
-
-    #[test]
-    fn the_general_translation_of_an_english_comes_last() {
-        let con = Connection::open_in_memory().unwrap();
-        con.execute_batch(SCHEMA).unwrap();
-        con.execute_batch(
-            "INSERT INTO translations VALUES (1, 7, 'Torcia', 'manual', 'editor:Ana', 1), (2, 7, 'Torcia', 'manual', 'editor:Ana', 1),
-                                             (3, 7, 'Torcia di Bea', 'manual', 'cloud:Bea', 9), (4, 7, 'Fiaccola', 'auto', 'deepl', 10),
-                                             (5, 8, 'Fiaccole', 'auto', 'deepl', 1), (6, 8, 'Fiaccole nuove', 'auto', 'deepl', 2);",
-        )
-        .unwrap();
-        let mut same = HashMap::new();
-        let mut stmt = con.prepare(LOAD).unwrap();
-        for row in stmt.query_map([], |r| Ok((r.get::<_, i64>(1)?, r.get::<_, String>(2)?))).unwrap() {
-            let (hash, it) = row.unwrap();
-            same.insert(hash, it);
-        }
-        // The text most hand corrections have, not the last one; with none, the newest.
-        assert_eq!((same[&7].as_str(), same[&8].as_str()), ("Torcia", "Fiaccole nuove"));
-    }
-
-    #[test]
-    fn a_learned_term_repairs_machine_translations_only() {
-        let con = Connection::open_in_memory().unwrap();
-        con.execute_batch(SCHEMA).unwrap();
-        con.execute_batch(
-            "INSERT INTO strings VALUES (1, 1, 'Seraph Vanguard', 0, 0, 1), (2, 2, 'Seraph Guard', 0, 0, 1),
-                                        (3, 3, 'Seraph Axe', 0, 0, 1), (4, 4, 'Sword', 0, 0, 1);
-             INSERT INTO translations VALUES (1, 1, 'Avanguardia dei Serafi', 'auto', 'deepl', 1),
-                                             (2, 2, 'Guardia dei Serafi', 'manual', 'editor:Ana', 1),
-                                             (3, 3, 'Ascia dei Serafi', 'auto', 'server:deepl', 1),
-                                             (4, 4, 'Spada dei Serafi', 'auto', 'deepl', 1);
-             INSERT INTO proofs VALUES (1, 1, 'sig', 'raw');",
-        )
-        .unwrap();
-        let term = Term { en: "seraph".into(), it: "Serafini".into(), wrong: vec!["Serafi".into()] };
-        save_term(&con, &term, Origin::Cloud).unwrap();
-        let fixed = repair_with(&con, &term).unwrap();
-        assert_eq!(fixed, [(1, 1, "Avanguardia dei Serafini".into()), (3, 3, "Ascia dei Serafini".into())]);
-        let it = |id: u32| -> String { con.query_row("SELECT it FROM translations WHERE id = ?1", [id], |r| r.get(0)).unwrap() };
-        // The hand correction and the text without the word are untouched.
-        assert_eq!((it(2), it(4)), ("Guardia dei Serafi".into(), "Spada dei Serafi".into()));
-        let proofs: i64 = con.query_row("SELECT count(*) FROM proofs", [], |r| r.get(0)).unwrap();
-        assert_eq!(proofs, 0);
-        // Saved and loaded back.
-        assert_eq!(load_glossary(&con).unwrap(), [term]);
     }
 
     #[test]

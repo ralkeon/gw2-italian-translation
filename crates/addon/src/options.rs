@@ -1,39 +1,26 @@
-//! The addon's page in Nexus' options: the translators' keys, in the order they are used.
+//! The addon's page in Nexus' options: the variant (hybrid or all-Italian). The translations come
+//! from the project's database: there is no translator or key to set here.
 
-use std::sync::Mutex;
-
-use gw2it_translate::openai::PRESETS;
 use nexus::imgui::Ui;
 
-use crate::{
-    config::{self, Config, Llm},
-    install, store,
-};
-
-/// The fields as typed, until saved.
-static EDIT: Mutex<Option<Config>> = Mutex::new(None);
+use crate::{config, install, store};
 
 pub fn render(ui: &Ui) {
-    let Ok(mut edit) = EDIT.lock() else {
-        return;
-    };
-    let c = edit.get_or_insert_with(config::get);
-
     ui.text_disabled(concat!("Italian Translation v", env!("CARGO_PKG_VERSION")));
     if install::refreshes_paused() {
         ui.text_colored([0.95, 0.75, 0.3, 1.0], "Attenzione");
         ui.text_wrapped(
-            "Pause Refreshes di Text Translator è attivo: i testi già a schermo non si aggiornano              (traduzioni nuove, tasto di Show Translated Text). Spegnilo nelle opzioni di Text Translator in Nexus.",
+            "Pause Refreshes di Text Translator è attivo: i testi già a schermo non si aggiornano \
+             (traduzioni nuove, tasto di Show Translated Text). Spegnilo nelle opzioni di Text Translator in Nexus.",
         );
     }
 
-    // The variant: applied at once, not with "Salva" (it is no key to type).
+    // Applied at once.
     let mut full = config::get().full_italian;
     if ui.checkbox("Tutto in italiano", &mut full) {
         let mut saved = config::get();
         saved.full_italian = full;
         config::set(saved);
-        c.full_italian = full;
         store::set_full_mode(full);
     }
     ui.text_wrapped(
@@ -44,68 +31,8 @@ pub fn render(ui: &Ui) {
     );
     ui.text_disabled(format!("Testi tutti in italiano già pronti: {}", store::full_count()));
     ui.separator();
-
     ui.text_wrapped(
-        "Traduttori, nell'ordine in cui vengono usati: quando uno finisce la quota o non risponde \
-         si passa al successivo, e si torna al primo appena è di nuovo disponibile. Tutte le chiavi \
-         sono facoltative: senza, o quando sono esaurite, traduce il server del progetto.",
+        "Le traduzioni arrivano dal database del progetto, aggiornato ogni giorno. Un testo non \
+         ancora tradotto resta in inglese finché la sua traduzione non arriva.",
     );
-    ui.separator();
-
-    ui.text("DeepL (piano API Free: 500.000 caratteri al mese)");
-    ui.input_text("Chiave##deepl", &mut c.deepl.api_key).password(true).build();
-
-    ui.text("Google Gemini (aistudio.google.com)");
-    ui.input_text("Chiave##gemini", &mut c.gemini.api_key).password(true).build();
-    ui.input_text("Modelli, separati da virgole##gemini", &mut c.gemini.model).build();
-
-    ui.text("Microsoft Azure Translator (piano F0: 2 milioni di caratteri al mese)");
-    ui.input_text("Chiave##azure", &mut c.azure.api_key).password(true).build();
-    ui.input_text("Regione (es. italynorth)##azure", &mut c.azure.region).build();
-
-    ui.text("Altri modelli linguistici (API compatibile con OpenAI)");
-    let mut remove = None;
-    for (i, llm) in c.llm.iter_mut().enumerate() {
-        ui.input_text(format!("Nome##llm-name-{i}"), &mut llm.name).build();
-        ui.input_text(format!("Indirizzo API##llm-url-{i}"), &mut llm.url).build();
-        ui.input_text(format!("Chiave##llm-key-{i}"), &mut llm.api_key).password(true).build();
-        ui.input_text(format!("Modello##llm-model-{i}"), &mut llm.model).build();
-        if ui.button(format!("Rimuovi {}##llm-remove-{i}", llm.name)) {
-            remove = Some(i);
-        }
-        ui.separator();
-    }
-    if let Some(i) = remove {
-        c.llm.remove(i);
-    }
-    ui.text_disabled("Aggiungi:");
-    for (name, url, model) in PRESETS {
-        ui.same_line();
-        if ui.button(format!("{name}##add")) {
-            c.llm.push(Llm { name: (*name).into(), url: (*url).into(), api_key: String::new(), model: (*model).into() });
-        }
-    }
-    ui.same_line();
-    if ui.button("Altro##add") {
-        c.llm.push(Llm::default());
-    }
-
-    ui.separator();
-    if ui.button("Salva") {
-        // Only the keys come from here: the rest of the config may have changed meanwhile
-        // (the sync token, the install flag).
-        let mut saved = config::get();
-        saved.deepl.api_key = c.deepl.api_key.trim().to_owned();
-        saved.azure = c.azure.clone();
-        saved.gemini = c.gemini.clone();
-        saved.gemini.api_key = saved.gemini.api_key.trim().to_owned();
-        saved.llm = c.llm.clone();
-        config::set(saved);
-        *edit = None;
-        return;
-    }
-    ui.same_line();
-    if ui.button("Annulla") {
-        *edit = None;
-    }
 }

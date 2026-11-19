@@ -15,11 +15,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    pub deepl: Deepl,
-    pub azure: Azure,
-    pub gemini: Gemini,
-    /// Other language models, with OpenAI's API: after Azure, in this order.
-    pub llm: Vec<Llm>,
+    // The translators' keys of earlier versions ([deepl], [gemini], [azure], [[llm]]) are not read
+    // any more, and are left out when the file is written back.
     pub sync: Sync,
     pub install: Install,
     /// "Tutto in italiano": the names the hybrid translation keeps in English (skills, traits,
@@ -27,66 +24,7 @@ pub struct Config {
     pub full_italian: bool,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Deepl {
-    /// DeepL API key (https://www.deepl.com/your-account/keys). Empty: the project's server
-    /// translates, with its own key.
-    /// Keys ending in ":fx" are API Free keys and use the api-free endpoint.
-    pub api_key: String,
-    /// Most texts sent in one request (DeepL accepts up to 50).
-    pub batch_max: usize,
-    /// How long to keep collecting after the first new text: a window or a dialogue arrives in
-    /// one burst and is translated together, as context for each other.
-    pub batch_wait_ms: u64,
-}
-
-impl Default for Deepl {
-    fn default() -> Self {
-        Self { api_key: String::new(), batch_max: 50, batch_wait_ms: 400 }
-    }
-}
-
-/// Microsoft Azure AI Translator: after Gemini.
-#[derive(Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Azure {
-    pub api_key: String,
-    /// The resource's region, e.g. westeurope; empty for a global resource.
-    pub region: String,
-}
-
-/// A service with OpenAI's API: Groq, OpenRouter, Mistral, Cerebras...
-#[derive(Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Llm {
-    pub name: String,
-    /// API base, e.g. https://api.groq.com/openai/v1.
-    pub url: String,
-    pub api_key: String,
-    pub model: String,
-}
-
-/// Gemini: after DeepL.
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Gemini {
-    /// Google AI Studio key (https://aistudio.google.com/apikey).
-    pub api_key: String,
-    /// Models in order, separated by commas: the next one when one is overloaded.
-    pub model: String,
-}
-
-/// Fast ones: a fallback must not keep the game in English for long.
-pub const GEMINI_MODELS: &str = "gemini-3.1-flash-lite,gemini-3.6-flash";
-
-impl Default for Gemini {
-    fn default() -> Self {
-        Self { api_key: String::new(), model: GEMINI_MODELS.into() }
-    }
-}
-
-/// Global translations database (server/ in the repository).
+/// The project's translations database (crates/server on ifalna).
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Sync {

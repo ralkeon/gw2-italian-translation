@@ -1,4 +1,4 @@
-//! State shared between the pipe thread, the store thread, the translator and the UI.
+//! State shared between the pipe thread, the store thread, the sync thread and the UI.
 
 use std::{
     sync::{
@@ -16,14 +16,6 @@ pub struct Shared {
     pub stored: AtomicU64,
     /// Saved translations.
     pub translated: AtomicU64,
-    /// Texts waiting for the translator.
-    pub queued: AtomicU64,
-    /// Translations thrown away in this session because they broke the markup.
-    pub rejected: AtomicU64,
-    /// What the translator is doing.
-    pub status: Mutex<String>,
-    /// DeepL characters used and allowed this month.
-    pub usage: Mutex<Option<(u64, u64)>>,
     pub sync: Mutex<Sync>,
 }
 
@@ -41,9 +33,5 @@ pub static SHARED: Shared = Shared {
     received: AtomicU64::new(0),
     stored: AtomicU64::new(0),
     translated: AtomicU64::new(0),
-    queued: AtomicU64::new(0),
-    rejected: AtomicU64::new(0),
-    status: Mutex::new(String::new()),
-    usage: Mutex::new(None),
     sync: Mutex::new(Sync { status: String::new(), at: None, sent: 0, received: 0 }),
 };

@@ -4,10 +4,9 @@
 //! the shim (gw2it_shim.exe), which only relays the requests to this DLL over named pipes. All the
 //! logic and the in-game UI live here.
 //!
-//! Every source text is saved in strings.db. A text with a saved translation gets it at once;
-//! the others are translated in the background (DeepL, Gemini when DeepL is used up, or the
-//! project's server for players without keys: translate.rs) and pushed into the game when ready.
-//! Translations are shared with the other players through a global database (sync.rs).
+//! Every source text is saved in strings.db. The translations come from the project's database on
+//! ifalna (sync.rs), made there by the translation agents: a text that has one gets it at once, a
+//! text that has none yet stays English until it arrives (no translator runs here).
 
 pub(crate) use gw2it_text::{markup, plural};
 mod cache;
@@ -18,7 +17,6 @@ mod pipe;
 mod state;
 mod store;
 mod sync;
-mod translate;
 mod ui;
 
 use nexus::{
@@ -68,17 +66,10 @@ fn load() {
         }
     };
     let db = dir.join("strings.db");
-    let backlog = match store::start(&db) {
-        Ok(backlog) => backlog,
-        Err(e) => {
-            log::error!("cannot open strings.db: {e}");
-            return;
-        }
-    };
-    if !backlog.is_empty() {
-        log::info!("{} texts without a translation from earlier sessions: queued", backlog.len());
+    if let Err(e) = store::start(&db) {
+        log::error!("cannot open strings.db: {e}");
+        return;
     }
-    translate::start(backlog);
     if let Some(tt_dir) = &tt_dir {
         cache::start(tt_dir, &db);
     }
@@ -106,7 +97,6 @@ fn unload() {
     cache::stop();
     pipe::stop();
     sync::stop();
-    translate::stop();
     store::stop();
     log::info!("unloaded");
 }
