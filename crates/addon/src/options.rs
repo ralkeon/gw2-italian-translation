@@ -51,8 +51,8 @@ pub fn render(ui: &Ui) {
 /// Ko-fi's cup (from its own button), drawn inside ours.
 const KOFI_ICON: &[u8] = include_bytes!("../assets/kofi-cup.png");
 
-/// On the right, as other addons do: "Se l'addon ti piace" and a button to the project's Ko-fi page with
-/// Ko-fi's cup, opened in the default browser.
+/// "Se l'addon ti piace" and a button to the project's Ko-fi page with Ko-fi's cup, opened in the
+/// default browser.
 fn tips(ui: &Ui) {
     const NOTE: &str = "Se l'addon ti piace";
     const LABEL: &str = "Supportami su Ko-fi";
@@ -61,11 +61,6 @@ fn tips(ui: &Ui) {
     let icon = [height * 0.8 * 64.0 / 56.0, height * 0.8];
     let text = ui.calc_text_size(LABEL);
     let width = pad + icon[0] + pad * 0.75 + text[0] + pad;
-    let note = ui.calc_text_size(NOTE)[0];
-    let spacing = ui.clone_style().item_spacing[0];
-    let [x, y] = ui.cursor_pos();
-    let free = ui.content_region_avail()[0] - (note + spacing + width);
-    ui.set_cursor_pos([x + free.max(0.0), y]);
     ui.align_text_to_frame_padding();
     ui.text_disabled(NOTE);
     ui.same_line();
