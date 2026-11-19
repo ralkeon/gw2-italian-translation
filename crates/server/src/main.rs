@@ -1,5 +1,5 @@
-//! Global translations database of Italian Translation, self-hosted: the same API, schema and
-//! statements as the Cloudflare Worker in server/ (see server/README.md), on a local SQLite file.
+//! Global translations database of Italian Translation, self-hosted on a local SQLite file
+//! (schema.sql and sql/ next to this crate).
 //!
 //! Plain HTTP on a local address: a reverse proxy (Apache, Caddy...) in front gives it HTTPS.
 //!
@@ -8,7 +8,6 @@
 //!              [--review-daily 3000]   (texts the background review gives the model per day; 0: off)
 //!              [--frozen]   (the database as it is: /sync gives everything but takes no rows or terms,
 //!                            no /translate, no background review; also when the file <db>.frozen exists)
-//! gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>   (see replicate.rs)
 //! gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
 //!                                                                         (see consistency.rs)
 //! gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts N] [--dry-run]
@@ -54,17 +53,16 @@ mod byhand;
 mod plurals;
 mod priority;
 mod refs;
-mod replicate;
 mod review;
 mod sign;
 mod translate;
 
-const SCHEMA: &str = include_str!("../../../server/schema.sql");
-const SQL_HISTORY: &str = include_str!("../../../server/sql/history.sql");
-const SQL_UPSERT: &str = include_str!("../../../server/sql/upsert.sql");
-const SQL_PULL: &str = include_str!("../../../server/sql/pull.sql");
-const SQL_SAME_HISTORY: &str = include_str!("../../../server/sql/same_history.sql");
-const SQL_SAME: &str = include_str!("../../../server/sql/same.sql");
+const SCHEMA: &str = include_str!("../schema.sql");
+const SQL_HISTORY: &str = include_str!("../sql/history.sql");
+const SQL_UPSERT: &str = include_str!("../sql/upsert.sql");
+const SQL_PULL: &str = include_str!("../sql/pull.sql");
+const SQL_SAME_HISTORY: &str = include_str!("../sql/same_history.sql");
+const SQL_SAME: &str = include_str!("../sql/same.sql");
 
 /// Rows accepted in one /sync: the addon sends at most this many.
 const PUSH_MAX: usize = 200;
@@ -116,7 +114,6 @@ impl From<rusqlite::Error> for HttpError {
 
 const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
                     [--translators translators.json] [--frozen]
-       gw2it-server replicate [--db gw2it.db] --to <spare URL> --key-file <file>
        gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
        gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts N] [--dry-run]
        gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
@@ -132,7 +129,6 @@ const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:879
 
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let replicate = args.first().is_some_and(|a| a == "replicate");
     let consistency = args.first().is_some_and(|a| a == "consistency");
     let english_names = args.first().is_some_and(|a| a == "names");
     let review = args.first().is_some_and(|a| a == "review");
@@ -144,7 +140,7 @@ fn main() {
     let gw2dat = args.first().is_some_and(|a| a == "gw2dat");
     let seeds = args.first().is_some_and(|a| a == "seeds");
     let full = args.first().is_some_and(|a| a == "full");
-    if replicate || consistency || english_names || review || plurals || import || repair || bulk || lt_sync || gw2dat || seeds || full {
+    if consistency || english_names || review || plurals || import || repair || bulk || lt_sync || gw2dat || seeds || full {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
@@ -233,27 +229,6 @@ fn main() {
                 eprintln!("gw2dat: {e}");
                 std::process::exit(1);
             }
-        }
-        return;
-    }
-    if replicate {
-        let (Some(to), Some(key_file)) = (options.remove("--to"), options.remove("--key-file")) else {
-            eprintln!("{USAGE}");
-            std::process::exit(2);
-        };
-        let key = std::fs::read_to_string(&key_file).unwrap_or_else(|e| {
-            eprintln!("cannot read {key_file}: {e}");
-            std::process::exit(1);
-        });
-        let con = open(&db).unwrap_or_else(|e| {
-            eprintln!("cannot open {db}: {e}");
-            std::process::exit(1);
-        });
-        // Frozen (the rows are the agents' only): nothing written on the spare comes back but its users.
-        let frozen = frozen || std::path::Path::new(&format!("{db}.frozen")).exists();
-        if let Err(e) = replicate::run(con, to.trim_end_matches('/'), key.trim(), frozen) {
-            eprintln!("replicate: {e}");
-            std::process::exit(1);
         }
         return;
     }

@@ -749,7 +749,7 @@ mod tests {
 
     fn db() -> Connection {
         let con = Connection::open_in_memory().unwrap();
-        con.execute_batch(include_str!("../../../server/schema.sql")).unwrap();
+        con.execute_batch(include_str!("../schema.sql")).unwrap();
         con.execute_batch(SCHEMA).unwrap();
         con.execute_batch(
             "INSERT INTO translations (id, hash, en, it, status, author, at, seq, trust) VALUES

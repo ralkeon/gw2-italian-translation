@@ -306,7 +306,7 @@ mod tests {
 
     fn db() -> Connection {
         let con = Connection::open_in_memory().unwrap();
-        con.execute_batch(include_str!("../../../server/schema.sql")).unwrap();
+        con.execute_batch(include_str!("../schema.sql")).unwrap();
         con.execute_batch(crate::names::SCHEMA).unwrap();
         con.execute_batch(crate::consistency::SCHEMA).unwrap();
         con.execute_batch(SCHEMA).unwrap();

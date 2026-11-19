@@ -1,5 +1,5 @@
 //! The glossary of the Local Translator module (glossary_it.json), brought into ours:
-//! `gw2it-server import-glossary --file glossary_it.json [--excluded server/glossary-import-excluded.json] [--dry-run]`.
+//! `gw2it-server import-glossary --file glossary_it.json [--excluded crates/server/glossary-import-excluded.json] [--dry-run]`.
 //!
 //! What is the same word in both sides ("Fractal": "Fractal") is a name that stays in English: it
 //! goes into `english_names` (kind `imported`), which the server and the addons already use to keep a
@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn apply_adds_names_once_and_says_the_terms() {
         let con = Connection::open_in_memory().unwrap();
-        con.execute_batch(include_str!("../../../server/schema.sql")).unwrap();
+        con.execute_batch(include_str!("../schema.sql")).unwrap();
         con.execute_batch(crate::names::SCHEMA).unwrap();
         con.execute("INSERT INTO english_names VALUES ('Fractal', 'item', 1)", []).unwrap();
         let p = Plan {

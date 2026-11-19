@@ -33,10 +33,8 @@ pub struct Sync {
     pub url: String,
     /// This installation's key, given by the server the first time.
     pub token: String,
-    /// Used when the main server does not answer. Empty: the project's spare; "off": none.
-    pub fallback_url: String,
-    /// This installation's key on the spare.
-    pub fallback_token: String,
+    // fallback_url and fallback_token (the spare on Cloudflare, removed 2026-11-19) are not read
+    // any more, and are left out when the file is written back.
 }
 
 impl Default for Sync {
@@ -45,8 +43,6 @@ impl Default for Sync {
             enabled: true,
             url: String::new(),
             token: String::new(),
-            fallback_url: String::new(),
-            fallback_token: String::new(),
         }
     }
 }
@@ -55,12 +51,6 @@ impl Sync {
     pub fn server(&self) -> &str {
         let url = self.url.trim().trim_end_matches('/');
         if url.is_empty() { SYNC_URL } else { url }
-    }
-
-    pub fn fallback(&self) -> Option<&str> {
-        let url = self.fallback_url.trim().trim_end_matches('/');
-        let url = if url.is_empty() { SYNC_FALLBACK_URL } else { url };
-        (url != "off" && !url.is_empty() && url != self.server()).then_some(url)
     }
 }
 
@@ -75,8 +65,6 @@ pub struct Install {
 
 /// The project's server: crates/server on ifalna.
 const SYNC_URL: &str = "https://ifalna.ralkeon.com/gw2it";
-/// Its spare, the same API on Cloudflare (server/), copied from it every night.
-const SYNC_FALLBACK_URL: &str = "https://gw2it-sync.gw2it-sync.workers.dev";
 
 static CONFIG: Mutex<Option<(PathBuf, Config)>> = Mutex::new(None);
 

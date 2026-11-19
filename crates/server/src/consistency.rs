@@ -451,7 +451,7 @@ mod tests {
 
     fn db() -> Connection {
         let con = Connection::open_in_memory().unwrap();
-        con.execute_batch(include_str!("../../../server/schema.sql")).unwrap();
+        con.execute_batch(include_str!("../schema.sql")).unwrap();
         con.execute_batch(SCHEMA).unwrap();
         con.execute_batch(crate::names::SCHEMA).unwrap();
         con.execute_batch("INSERT INTO english_names (name, kind, added) VALUES ('Seraph', 'imported', 1)").unwrap();

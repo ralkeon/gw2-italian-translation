@@ -481,7 +481,7 @@ mod tests {
         std::fs::write(&names, "[[name]]\nen = \"Bone Minions\"\nkind = \"skill\"\nit = \"Sgherri d'Ossa\"\nstatus = \"proposed\"\n").unwrap();
         std::fs::write(&terms, "[[term]]\nen = \"Might\"\nkind = \"boon\"\nit = \"Forza\"\nstatus = \"approved\"\n").unwrap();
         let con = Connection::open_in_memory().unwrap();
-        con.execute_batch(include_str!("../../../server/schema.sql")).unwrap();
+        con.execute_batch(include_str!("../schema.sql")).unwrap();
         con.execute_batch(
             "INSERT INTO translations (id, hash, en, it, status, author, at, seq, trust) VALUES
                (1, 'a', 'Bone Minions', 'Bone Minions', 'auto', 'x', 0, 1, 1),

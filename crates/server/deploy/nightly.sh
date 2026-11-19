@@ -3,7 +3,8 @@
 # 30 2 * * * sh $HOME/gw2it-sync/night.sh, which has the whole order):
 #   sh nightly.sh jobs      map + bulk, names, plurals: first thing, before the agents audit them
 #   sh nightly.sh lt-sync   the copy for the Local Translator's glossary, after the agents fixed our rows
-#   sh nightly.sh publish   the copy to the spare and the export, last: they take everything the night changed
+#   sh nightly.sh publish   the export, last: it takes everything the night changed (no spare any more:
+#                           the Cloudflare copy was removed 2026-11-19)
 #   sh nightly.sh           all three, one after the other (by hand)
 # Each may now run for hours (it waits for busy models): run together they would spend the same
 # quota and the later ones in the order of priority.rs would work on rows the earlier ones are
@@ -54,6 +55,5 @@ if [ "$part" = all ] || [ "$part" = lt-sync ]; then
 fi
 
 if [ "$part" = all ] || [ "$part" = publish ]; then
-    ./gw2it-server replicate --db data/gw2it.db --to https://gw2it-sync.gw2it-sync.workers.dev --key-file replica.key >> replicate.log 2>&1
     sh ./export.sh
 fi

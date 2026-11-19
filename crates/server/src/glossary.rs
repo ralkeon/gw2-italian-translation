@@ -10,8 +10,8 @@ use gw2it_text::glossary::{self, Term};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
-pub const SQL_PUT: &str = include_str!("../../../server/sql/glossary_put.sql");
-pub const SQL_PULL: &str = include_str!("../../../server/sql/glossary_pull.sql");
+pub const SQL_PUT: &str = include_str!("../sql/glossary_put.sql");
+pub const SQL_PULL: &str = include_str!("../sql/glossary_pull.sql");
 
 /// Terms accepted in one /sync.
 pub const PUSH_MAX: usize = 50;
@@ -86,7 +86,7 @@ mod tests {
 
     fn db() -> Connection {
         let con = Connection::open_in_memory().unwrap();
-        con.execute_batch(include_str!("../../../server/schema.sql")).unwrap();
+        con.execute_batch(include_str!("../schema.sql")).unwrap();
         con
     }
 
@@ -118,7 +118,7 @@ mod tests {
         let (rows, seq, more) = pull(&con, 0).unwrap();
         assert_eq!((rows.len(), seq, more), (2, 2, false));
         assert_eq!(rows[0], json!(["seraph", "Serafini", ["Serafi"], "Ana", 1]));
-        // Changing a term moves it to the end; the spare's seq start above.
+        // Changing a term moves it to the end, even past a seq far above.
         put(&con, &said("Serafini", "Serafino"), "Bea", 2, 3, 0).unwrap();
         let (rows, seq, _) = pull(&con, 2).unwrap();
         assert_eq!((rows.len(), seq), (1, 3));

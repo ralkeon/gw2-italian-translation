@@ -9,8 +9,8 @@
 //! Merge rules: a received hand correction replaces anything, a received machine translation only a
 //! machine translation (the hand corrections an earlier version's editor made here stay).
 //!
-//! When the main server does not answer, the same sync goes to its spare (config.rs), which holds
-//! a copy of it as of last night with the same seq. Every sync tries the main server first.
+//! When the server does not answer, the game keeps what strings.db already has and the sync tries
+//! again later (there is no spare server any more).
 
 use std::{
     path::{Path, PathBuf},
@@ -72,9 +72,8 @@ pub fn stop() {
 #[derive(Debug)]
 enum Error {
     /// The server does not know our token (new server, or it was revoked): get a new one.
-    /// True for the spare's token.
-    Unauthorized(bool),
-    /// No answer, or the server is down (5xx): worth trying the spare.
+    Unauthorized,
+    /// No answer, or the server is down (5xx).
     Unreachable(String),
     Other(String),
 }
@@ -82,32 +81,9 @@ enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Unauthorized(_) => f.write_str("chiave non riconosciuta, ne chiedo una nuova"),
+            Self::Unauthorized => f.write_str("chiave non riconosciuta, ne chiedo una nuova"),
             Self::Unreachable(e) | Self::Other(e) => f.write_str(e),
         }
-    }
-}
-
-/// The server a sync goes to.
-#[derive(Clone, Copy)]
-struct Target<'a> {
-    url: &'a str,
-    token: &'a str,
-    spare: bool,
-}
-
-impl<'a> Target<'a> {
-    fn main(sync: &'a config::Sync) -> Self {
-        Self { url: sync.server(), token: &sync.token, spare: false }
-    }
-
-    fn spare(sync: &'a config::Sync) -> Option<Self> {
-        Some(Self { url: sync.fallback()?, token: &sync.fallback_token, spare: true })
-    }
-
-    /// The newest seq received from it.
-    fn seq_key(&self) -> &'static str {
-        if self.spare { "seq_spare" } else { "seq" }
     }
 }
 
@@ -139,15 +115,15 @@ fn run(db: &Path, stop: &Receiver<()>) {
             wait = INTERVAL;
             continue;
         }
-        match sync_once(&mut con, &sync, stop) {
-            Ok((next, _)) => {
+        match cycle(&mut con, &sync, stop) {
+            Ok(next) => {
                 failures = 0;
                 wait = next;
             }
-            Err(Error::Unauthorized(spare)) => {
+            Err(Error::Unauthorized) => {
                 log::warn!("sync: token refused, registering again");
                 let mut c = config::get();
-                if spare { c.sync.fallback_token.clear() } else { c.sync.token.clear() }
+                c.sync.token.clear();
                 config::set(c);
                 failures += 1;
                 wait = FIRST;
@@ -162,28 +138,6 @@ fn run(db: &Path, stop: &Receiver<()>) {
     }
 }
 
-/// One sync with the main server, or with the spare if the main one does not answer. Returns
-/// the wait before the next one and whether it went to the spare.
-fn sync_once(con: &mut Connection, sync: &config::Sync, stop: &Receiver<()>) -> Result<(Duration, bool), Error> {
-    let main = Target::main(sync);
-    match cycle(con, main, stop) {
-        Ok(next) => {
-            // On the main server: a later fallback starts again from its seq.
-            con.execute("DELETE FROM sync_state WHERE k IN ('seq_spare', 'gseq_spare')", [])?;
-            Ok((next, false))
-        }
-        Err(Error::Unreachable(e)) => {
-            let stopping = matches!(stop.try_recv(), Err(TryRecvError::Disconnected));
-            let Some(spare) = Target::spare(sync).filter(|_| !stopping) else {
-                return Err(Error::Unreachable(e));
-            };
-            log::warn!("sync: {e}; trying the spare {}", spare.url);
-            cycle(con, spare, stop).map(|next| (next, true))
-        }
-        Err(e) => Err(e),
-    }
-}
-
 fn open(db: &Path) -> rusqlite::Result<Connection> {
     let con = Connection::open(db)?;
     con.busy_timeout(Duration::from_secs(10))?;
@@ -191,16 +145,16 @@ fn open(db: &Path) -> rusqlite::Result<Connection> {
     con.execute_batch("CREATE TABLE IF NOT EXISTS sync_state (k TEXT PRIMARY KEY, v INTEGER NOT NULL);")?;
     // Before cloud_strings the English of what was received was not kept: everything once more.
     con.execute_batch(
-        "DELETE FROM sync_state WHERE k IN ('seq', 'seq_spare')
+        "DELETE FROM sync_state WHERE k = 'seq'
              AND NOT EXISTS (SELECT 1 FROM sync_state WHERE k = 'cloud_en');
-         INSERT OR IGNORE INTO sync_state (k, v) VALUES ('cloud_en', 1);",
+         INSERT OR IGNORE INTO sync_state (k, v) VALUES ('cloud_en', 1);
+         DELETE FROM sync_state WHERE k IN ('seq_spare', 'gseq_spare');",
     )?;
     Ok(con)
 }
 
-/// Where the last sync stopped: newest seq received (from the server in use), and the last row
-/// sent, by (at, id, hash). The rows sent to the spare reach the main server through it. The same
-/// for the glossary: newest seq received, and the time of the newest term learned here that was sent.
+/// Where the last sync stopped: newest seq received, and the last row sent, by (at, id, hash) (from
+/// earlier versions, which sent hand corrections). The same for the glossary: newest seq received, and the time of the newest term learned here that was sent.
 #[derive(Clone, Copy, Default)]
 struct Mark {
     seq: i64,
@@ -213,36 +167,26 @@ struct Mark {
     nseq: i64,
     /// The same for the names taken out of them.
     useq: i64,
-    /// The newest row of the all-Italian variant received (from the main server; the spare has none).
+    /// The newest row of the all-Italian variant received.
     fseq: i64,
 }
 
-/// The sync_state key of the glossary's seq that goes with `seq_key`.
-fn glossary_key(seq_key: &str) -> String {
-    format!("g{seq_key}")
-}
-
 impl Mark {
-    fn load(con: &Connection, seq_key: &str) -> rusqlite::Result<Self> {
+    fn load(con: &Connection) -> rusqlite::Result<Self> {
         let get = |k: &str| -> rusqlite::Result<i64> {
             Ok(con.query_row("SELECT v FROM sync_state WHERE k = ?1", [k], |r| r.get(0)).optional()?.unwrap_or(0))
         };
-        // The spare is a copy of the main server with its seq, plus what was written there (seq
-        // from 10^12): what we had from the main server we need not get again.
-        let seq = get(seq_key)?.max(get("seq")?);
-        let gseq = get(&glossary_key(seq_key))?.max(get("gseq")?);
-        Ok(Self { seq, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")?, gseq, gsent: get("gsent_at")?, nseq: get("nseq")?, useq: get("useq")?, fseq: get("fseq")? })
+        Ok(Self { seq: get("seq")?, at: get("sent_at")?, id: get("sent_id")?, hash: get("sent_hash")?, gseq: get("gseq")?, gsent: get("gsent_at")?, nseq: get("nseq")?, useq: get("useq")?, fseq: get("fseq")? })
     }
 
-    fn save(&self, tx: &Transaction, seq_key: &str) -> rusqlite::Result<()> {
+    fn save(&self, tx: &Transaction) -> rusqlite::Result<()> {
         let mut stmt = tx.prepare_cached("INSERT OR REPLACE INTO sync_state (k, v) VALUES (?1, ?2)")?;
-        let gkey = glossary_key(seq_key);
         for (k, v) in [
-            (seq_key, self.seq),
+            ("seq", self.seq),
             ("sent_at", self.at),
             ("sent_id", self.id),
             ("sent_hash", self.hash),
-            (gkey.as_str(), self.gseq),
+            ("gseq", self.gseq),
             ("gsent_at", self.gsent),
             ("nseq", self.nseq),
             ("useq", self.useq),
@@ -279,7 +223,7 @@ struct Reply {
     unnames: Vec<String>,
     #[serde(default)]
     useq: i64,
-    // Missing from a server without the all-Italian variant (the spare).
+    // Missing from a server without the all-Italian variant.
     #[serde(default)]
     full: Vec<RemoteFull>,
     #[serde(default)]
@@ -294,35 +238,28 @@ struct RemoteFull(u32, String, String, #[allow(dead_code)] i64);
 
 /// One sync: a few requests while there is more to receive. Returns the wait before the next one.
 /// Nothing is sent but the marks: the translations are made on the server only.
-fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Duration, Error> {
-    let refused = |e| match e {
-        Error::Unauthorized(_) => Error::Unauthorized(target.spare),
-        e => e,
-    };
-    let server = target.url;
-    let token = if target.token.is_empty() { register(target).map_err(refused)? } else { target.token.to_owned() };
+fn cycle(con: &mut Connection, sync: &config::Sync, stop: &Receiver<()>) -> Result<Duration, Error> {
+    let server = sync.server();
+    let token = if sync.token.is_empty() { register(server)? } else { sync.token.clone() };
     let mut next = INTERVAL;
     let mut received = 0;
     for _ in 0..ROUNDS_MAX {
-        let mut mark = Mark::load(con, target.seq_key())?;
+        let mut mark = Mark::load(con)?;
         // The glossary is no longer used here (the rows come made by the agents): its seq still
         // moves on, so that a server that sends it does not send it again.
         let reply: Reply = post(
             &format!("{server}/sync"),
             Some(&token),
             &json!({ "since": mark.seq, "rows": [], "gsince": mark.gseq, "glossary": [], "nsince": mark.nseq, "usince": mark.useq, "fsince": mark.fseq }),
-        )
-        .map_err(refused)?;
+        )?;
         mark.seq = mark.seq.max(reply.seq);
         mark.gseq = mark.gseq.max(reply.gseq);
         mark.nseq = mark.nseq.max(reply.nseq);
         mark.useq = mark.useq.max(reply.useq);
         received_names(con, &reply.names, &reply.unnames)?;
-        if !target.spare {
-            received_full(con, &reply.full)?;
-            mark.fseq = mark.fseq.max(reply.fseq);
-        }
-        received += apply(con, &reply.rows, mark, target.seq_key())?;
+        received_full(con, &reply.full)?;
+        mark.fseq = mark.fseq.max(reply.fseq);
+        received += apply(con, &reply.rows, mark)?;
         next = Duration::from_secs(reply.next_s.clamp(30, 3600));
         let stopping = matches!(stop.try_recv(), Err(TryRecvError::Disconnected));
         if stopping || (!reply.more && !reply.gmore && !reply.fmore) {
@@ -335,22 +272,22 @@ fn cycle(con: &mut Connection, target: Target, stop: &Receiver<()>) -> Result<Du
     if let Ok(mut s) = SHARED.sync.lock() {
         s.at = Some(Instant::now());
         s.received += received as u64;
-        s.status = if target.spare { "ok (server di riserva)".into() } else { "ok".into() };
+        s.status = "ok".into();
     }
     Ok(next)
 }
 
-fn register(target: Target) -> Result<String, Error> {
+fn register(server: &str) -> Result<String, Error> {
     #[derive(Deserialize)]
     struct Registered {
         token: String,
     }
     let name = config::contributor().unwrap_or_default();
-    let Registered { token } = post(&format!("{}/register", target.url), None, &json!({ "name": name }))?;
+    let Registered { token } = post(&format!("{server}/register"), None, &json!({ "name": name }))?;
     let mut c = config::get();
-    if target.spare { c.sync.fallback_token = token.clone() } else { c.sync.token = token.clone() }
+    c.sync.token = token.clone();
     config::set(c);
-    log::info!("sync: registered on {}", target.url);
+    log::info!("sync: registered on {server}");
     Ok(token)
 }
 
@@ -362,7 +299,7 @@ fn post<T: DeserializeOwned>(url: &str, token: Option<&str>, body: &Value) -> Re
     let mut response = request.send_json(body).map_err(|e| Error::Unreachable(e.to_string()))?;
     match response.status().as_u16() {
         200 => response.body_mut().read_json().map_err(|e| Error::Other(e.to_string())),
-        401 => Err(Error::Unauthorized(false)),
+        401 => Err(Error::Unauthorized),
         429 => Err(Error::Other("server occupato".into())),
         s @ 500.. => Err(Error::Unreachable(format!("HTTP {s}"))),
         s => {
@@ -428,7 +365,7 @@ fn received_names(con: &mut Connection, names: &[String], unnames: &[String]) ->
 }
 
 /// Saves the received rows and the new mark, in one transaction. Returns how many changed here.
-fn apply(con: &mut Connection, rows: &[Remote], mark: Mark, seq_key: &str) -> Result<usize, Error> {
+fn apply(con: &mut Connection, rows: &[Remote], mark: Mark) -> Result<usize, Error> {
     let tx = con.transaction()?;
     let mut changed = 0;
     {
@@ -487,7 +424,7 @@ fn apply(con: &mut Connection, rows: &[Remote], mark: Mark, seq_key: &str) -> Re
             ])?;
         }
     }
-    mark.save(&tx, seq_key)?;
+    mark.save(&tx)?;
     tx.commit()?;
     Ok(changed)
 }
@@ -559,22 +496,22 @@ mod tests {
             remote(3, "%str1% Bow", "Arco", "auto"), // markup lost: refused
             remote(4, "Axe", "Ascia", "auto"),       // never seen here: kept for later
         ];
-        assert_eq!(apply(&mut con, &rows, Mark { seq: 9, ..past }, "seq").unwrap(), 2);
+        assert_eq!(apply(&mut con, &rows, Mark { seq: 9, ..past }).unwrap(), 2);
         assert_eq!(texts(&con), [
             (1, "Lama".into(), "cloud:Bea".into()),
             (2, "Scudo".into(), "editor:Ana".into()),
             (4, "Ascia".into(), "cloud:Bea".into()),
         ]);
-        assert_eq!(Mark::load(&con, "seq").unwrap().seq, 9);
+        assert_eq!(Mark::load(&con).unwrap().seq, 9);
         // A hand correction from the server replaces it.
-        apply(&mut con, &[remote(2, "Shield", "Egida", "manual")], past, "seq").unwrap();
+        apply(&mut con, &[remote(2, "Shield", "Egida", "manual")], past).unwrap();
         assert_eq!(texts(&con)[1], (2, "Egida".into(), "cloud:Bea".into()));
     }
 
     #[test]
     fn the_english_of_what_is_received_is_kept() {
         let mut con = db();
-        apply(&mut con, &[remote(4, "Axe", "Ascia", "auto"), remote(1, "Sword", "Lama", "auto")], Mark::default(), "seq").unwrap();
+        apply(&mut con, &[remote(4, "Axe", "Ascia", "auto"), remote(1, "Sword", "Lama", "auto")], Mark::default()).unwrap();
         // The English of a text the game has not shown here is kept; one it has shown is in `strings`.
         let kept: Vec<(u32, String)> = {
             let mut stmt = con.prepare("SELECT id, en FROM cloud_strings").unwrap();
