@@ -8,7 +8,7 @@
 //! ifalna (sync.rs), made there by the translation agents: a text that has one gets it at once, a
 //! text that has none yet stays English until it arrives (no translator runs here).
 
-pub(crate) use gw2it_text::{markup, plural};
+pub(crate) use gw2it_text::markup;
 mod cache;
 mod config;
 mod install;

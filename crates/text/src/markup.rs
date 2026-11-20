@@ -471,9 +471,86 @@ pub fn fix_percent(en: &str, it: &str) -> String {
     if token_mismatch(en, &out).is_empty() && !stray_percent(&out) { out } else { it.to_owned() }
 }
 
+/// `it` without its `[pl:"..."]` / `[pf:"..."]` marks: the singular text.
+pub fn singular(it: &str) -> String {
+    let mut out = String::with_capacity(it.len());
+    let mut rest = it;
+    while !rest.is_empty() {
+        if (rest.starts_with("[pl:\"") || rest.starts_with("[pf:\""))
+            && let Some(end) = rest.find("\"]")
+        {
+            rest = &rest[end + 2..];
+        } else {
+            let c = rest.chars().next().unwrap();
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+        }
+    }
+    out
+}
+
+/// Every `[pl:"..."]` (and feminine plural `[pf:"..."]`) follows a letter, or the gender mark of the
+/// same word (`Bambino[f:"Bambina"][pl:"Bambini"][pf:"Bambine"]`, as the official es/fr write it), and
+/// holds a non-empty word or phrase without quotes or brackets, and there is none that is not closed.
+pub fn marks_ok(it: &str) -> bool {
+    let mut rest = it;
+    let mut before = None;
+    // The last thing passed was a closed `[f:"..."]`/`[m:"..."]`/`[pl:"..."]` right after a word.
+    let mut after_mark = false;
+    while !rest.is_empty() {
+        for tag in ["[f:", "[m:"] {
+            if rest.starts_with(tag)
+                && let Some(inner) = rest.strip_prefix(&format!("{tag}\""))
+                && let Some(end) = inner.find("\"]")
+                && (before.is_some_and(char::is_alphabetic) || after_mark)
+            {
+                rest = &inner[end + 2..];
+                before = Some(']');
+                after_mark = true;
+            }
+        }
+        if rest.is_empty() {
+            break;
+        }
+        if rest.starts_with("[pl:") || rest.starts_with("[pf:") {
+            let Some(inner) = rest.strip_prefix("[pl:\"").or_else(|| rest.strip_prefix("[pf:\"")) else { return false };
+            let Some(end) = inner.find("\"]") else { return false };
+            let word = &inner[..end];
+            if word.trim().is_empty() || word.contains(['"', '[', ']', '<', '>', '%']) || !(before.is_some_and(char::is_alphabetic) || after_mark) {
+                return false;
+            }
+            rest = &inner[end + 2..];
+            before = Some(']');
+            after_mark = true;
+            continue;
+        }
+        after_mark = false;
+        let c = rest.chars().next().unwrap();
+        before = Some(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_plural_marks() {
+        assert_eq!(singular("Sigillo[pl:\"Sigilli\"] di ghiaccio superiore[pl:\"superiori\"]"), "Sigillo di ghiaccio superiore");
+        assert!(marks_ok("Fungo[pl:\"Funghi\"]"));
+        assert!(!marks_ok("[pl:\"Funghi\"]"));
+        assert!(!marks_ok("Fungo[pl:\"\"]"));
+        assert!(!marks_ok("Fungo[pl:\"Funghi\""));
+        assert!(marks_ok("Fungo"));
+        // Gender and plural on one word, as the official es/fr write it.
+        assert!(marks_ok("Bambino[f:\"Bambina\"][pl:\"Bambini\"][pf:\"Bambine\"]"));
+        assert!(marks_ok("Il[f:\"La\"] Bambino[f:\"Bambina\"] è tornato[f:\"tornata\"]"));
+        assert!(!marks_ok("[f:\"Bambina\"][pl:\"Bambini\"]"));
+        assert!(!marks_ok("Bambino [pl:\"Bambini\"]"));
+        assert_eq!(singular("Bambino[f:\"Bambina\"][pl:\"Bambini\"][pf:\"Bambine\"]"), "Bambino[f:\"Bambina\"]");
+    }
 
     #[test]
     fn markdown_line_ends() {

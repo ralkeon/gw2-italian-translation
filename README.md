@@ -101,5 +101,4 @@ Se l'addon ti piace e vuoi darmi una mano a tenerlo in piedi, puoi offrirmi un c
 
 ## Licenza
 
-MIT, vedi [LICENSE](LICENSE). La generazione dei plurali (`plural.rs`) è un porting di
-`plurale_it.py` di [gw2-nexus-local-translator](https://github.com/NikeGipple/gw2-nexus-local-translator) di NikeGipple.
+MIT, vedi [LICENSE](LICENSE).

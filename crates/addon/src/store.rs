@@ -19,7 +19,7 @@ use std::{
 use gw2it_text::names::Names;
 use rusqlite::{Connection, named_params, params};
 
-use crate::{cache, config, markup, pipe, plural};
+use crate::{cache, config, markup, pipe};
 
 pub struct Seen {
     pub id: u32,
@@ -258,7 +258,7 @@ fn broken(en: &str, it: &str) -> Option<&'static str> {
     if markup::stray_percent(it) {
         return Some("stray %");
     }
-    if !plural::marks_ok(it) {
+    if !markup::marks_ok(it) {
         return Some("plural marks broken");
     }
     None

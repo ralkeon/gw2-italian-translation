@@ -9,7 +9,8 @@
 //! translate, and cannot change one it did.
 //!
 //! /translate was removed on 2026-11-20 with the machine translators: nothing is signed any more,
-//! the addons' caches may still send the texts it signed before.
+//! the addons' caches may still send the texts it signed before. The plural marks the old addons
+//! added by rule (removed with it) are not made again here: such a text counts as an addon's own.
 
 use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
@@ -62,7 +63,7 @@ pub fn verify(secret: &[u8], en: &str, it: &str, signature: &str, answered: &str
     let expected = sign(secret, &prepared.xml, answered);
     // Not the first difference decides how long it takes.
     let same = expected.len() == signature.len() && expected.bytes().zip(signature.bytes()).fold(0, |d, (a, b)| d | (a ^ b)) == 0;
-    same && gw2it_text::finish(en, &prepared, answered).as_deref() == Some(it)
+    same && prepared.restore(answered).and_then(|t| gw2it_text::markup::finish(en, &t)).as_deref() == Some(it)
 }
 
 #[cfg(test)]

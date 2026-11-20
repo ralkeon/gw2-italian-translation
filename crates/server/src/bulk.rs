@@ -4,12 +4,13 @@
 //! line, `hash` the XXH3-64 of the English in UTF-8 as the game gives it. A name that stays in
 //! English is the name, the same English under another ID is copied, the rest goes to the agent
 //! (`ByHand`) with its neighbouring IDs (the same tooltip, the same dialogue: context for each
-//! other); its answers get the markup put back and the glossary's and the plural marks' fixes.
+//! other); its answers get the markup put back and checked and the glossary's fixes; the plural
+//! marks are the agent's.
 //! Stopped and started again, it goes on from the texts not written yet.
 
 use std::collections::HashSet;
 
-use gw2it_text::{glossary, markup, plural};
+use gw2it_text::{glossary, markup};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -35,7 +36,7 @@ pub struct Options {
 /// to understand it (the game's fr/es/de, the Local Translator's Italian, GW1 names: refs.rs)};
 /// nothing is written to the database.
 /// `Answers(file)`: the same lines with "answer": the Italian of "src", tags kept. Each answer goes
-/// through the checks (markup put back and checked, the glossary's fix, the plural marks) and is
+/// through the checks (markup put back and checked, the glossary's fix) and is
 /// written as `byhand` (trust 1); the names and the copies of the same English as `bulk`. A text
 /// with no answer stays for later.
 pub enum ByHand {
@@ -254,8 +255,7 @@ pub fn run(con: &Connection, file: &str, options: &Options) -> Result<Report, St
                 let Some(answer) = answers.get(&text.hash) else { continue };
                 match prepared.restore(answer).and_then(|it| markup::finish(&text.en, &it)) {
                     Some(it) => {
-                        let it = glossary::fix(&text.en, &it, &terms);
-                        rows.push((*text, plural::pluralize(&text.en, &it)));
+                        rows.push((*text, glossary::fix(&text.en, &it, &terms)));
                     }
                     None => {
                         eprintln!("bulk: {} rejected (markup changed): {:?} -> {:?}", text.id, text.en, answer);
