@@ -365,7 +365,6 @@ dependencies = [
  "bitcode",
  "getrandom 0.4.3",
  "gw2it-text",
- "gw2it-translate",
  "rusqlite",
  "serde_json",
  "sha2",
@@ -386,16 +385,6 @@ dependencies = [
 [[package]]
 name = "gw2it-text"
 version = "0.4.3"
-
-[[package]]
-name = "gw2it-translate"
-version = "0.4.3"
-dependencies = [
- "gw2it-text",
- "log",
- "serde_json",
- "ureq",
-]
 
 [[package]]
 name = "hashbrown"

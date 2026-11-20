@@ -1,14 +1,12 @@
-//! The model of the review (review.rs) and of the plurals check (plurals.rs) answered by hand: by
-//! a person, or by a chat with a language model on a subscription instead of a paid API.
+//! The model of lt-sync (lt_sync.rs) answered by hand: by a person, or by an agent (Claude Code on
+//! a subscription).
 //!
 //! `--ask-to <file>`: every text the job would give the model goes into the file, one JSON line
-//! each ({"en", "it", and "keep", "glossary"... as the model gets them}); the job gets no answer,
-//! so nothing is written (run it with --dry-run, or the texts are counted as given today).
+//! each ({"en", "it", and the rest as the model gets them}); the job gets no answer, so nothing is
+//! written (run it with --dry-run).
 //! `--answers <file>`: the same lines, each with "answer": what the model would answer for that
-//! text ({"ok": true} or {"it", "why", "kind"...}, no "n"). The job runs as with a model, with the
-//! checks that keep the text working in the game (markup, plural marks), not the ones that judge
-//! the meaning (names, terms, English, glossary): that judgment is the person's. A text with no line
-//! in the file gets no answer and stays for later.
+//! text (no "n"). The job runs as with a model, and knows the answers are by hand (`FLAG`). A text
+//! with no line in the file gets no answer and stays for later.
 
 use std::{collections::HashMap, fs, io::Write};
 

@@ -7,6 +7,9 @@
 //! does (gw2it-text) from the English and the answered XML: only if it comes out equal to the text
 //! received is it the server's own. An addon, or anybody, cannot sign a text the server did not
 //! translate, and cannot change one it did.
+//!
+//! /translate was removed on 2026-11-20 with the machine translators: nothing is signed any more,
+//! the addons' caches may still send the texts it signed before.
 
 use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};

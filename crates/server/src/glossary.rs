@@ -1,5 +1,5 @@
 //! The global glossary (gw2it_text::glossary): what the contributors fixed, kept here so that every
-//! installation downloads it with /sync, and so that /translate uses it for the players without keys.
+//! installation downloads it with /sync, and so that the agents get its terms (bulk.rs).
 //!
 //! Rows are one per English word (table `glossary`, schema.sql). They are merged with
 //! `glossary::merge`, the same function as in the addon: the strongest voice decides, the last of
@@ -73,7 +73,7 @@ pub fn pull(con: &Connection, since: i64) -> rusqlite::Result<(Vec<Value>, i64, 
     Ok((rows, seq, more))
 }
 
-/// Every term, for /translate.
+/// Every term, for /sync's fixes and for bulk.rs.
 pub fn all(con: &Connection) -> rusqlite::Result<Vec<Term>> {
     let mut stmt = con.prepare_cached("SELECT en, it, wrong FROM glossary")?;
     let rows = stmt.query_map([], |r| Ok(from_row(r.get(0)?, r.get(1)?, &r.get::<_, String>(2)?)))?;

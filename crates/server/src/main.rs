@@ -4,21 +4,15 @@
 //! Plain HTTP on a local address: a reverse proxy (Apache, Caddy...) in front gives it HTTPS.
 //!
 //! gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
-//!              [--translators translators.json]   (see translate.rs)
-//!              [--review-daily 3000]   (texts the background review gives the model per day; 0: off)
-//!              [--frozen]   (the database as it is: /sync gives everything but takes no rows or terms,
-//!                            no /translate, no background review; also when the file <db>.frozen exists)
-//! gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
-//!                                                                         (see consistency.rs)
-//! gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts N] [--dry-run]
-//!                                                                         (see names.rs)
+//!              [--frozen]   (the database as it is: /sync gives everything but takes no rows or terms;
+//!                            also when the file <db>.frozen exists)
+//!              (/translate answers 503 "no translations on this server": the machine translators were
+//!              removed on 2026-11-20; `--translators <file>` is still accepted and ignored, for the
+//!              service's command line)
 //! gw2it-server repair [--db gw2it.db] [--dry-run]   (the `%` a translator added, in every row)
-//! gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
-//!                                                                         (see review.rs)
-//! gw2it-server review|plurals ... --ask-to <file> | --answers <file>   (no model: by hand, see byhand.rs)
-//! gw2it-server bulk [--db gw2it.db] --file texts.jsonl (--translators translators.json | --ask-to <file> | --answers <file>) [--max-texts N] [--dry-run]
+//! gw2it-server bulk [--db gw2it.db] --file texts.jsonl (--ask-to <file> | --answers <file>) [--max-texts N] [--all] [--dry-run]
 //!                                                                         (see bulk.rs)
-//! gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json | --ask-to <file> | --answers <file>]
+//! gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--ask-to <file> | --answers <file>]
 //!              [--max-texts 2000] [--from-last] [--dry-run]               (see lt_sync.rs)
 //! gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]
 //!                                                                         (see gw2dat.rs)
@@ -35,29 +29,24 @@ use std::{
 };
 
 use gw2it_text::names::Names;
-use gw2it_translate::{Chain, Engine};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tiny_http::{Header, Method, Request, Response, Server};
 
 mod bulk;
-mod consistency;
 mod full;
 mod glossary;
 mod gw2dat;
 mod names;
-mod glossary_import;
 mod lt_sync;
 mod byhand;
-mod plurals;
-mod priority;
 mod refs;
-mod review;
 mod sign;
-mod translate;
 
 const SCHEMA: &str = include_str!("../schema.sql");
+/// The tables of the old jobs, kept in the databases.
+const SQL_OLD_JOBS: &str = include_str!("../sql/old_jobs.sql");
 const SQL_HISTORY: &str = include_str!("../sql/history.sql");
 const SQL_UPSERT: &str = include_str!("../sql/upsert.sql");
 const SQL_PULL: &str = include_str!("../sql/pull.sql");
@@ -78,17 +67,10 @@ const RATE: u32 = 30;
 const REGISTER_PER_DAY: u32 = 5;
 const REGISTER_WINDOW: Duration = Duration::from_secs(86_400);
 const THREADS: usize = 4;
-/// Texts the background review gives the model per day, by default.
-const REVIEW_DAILY: usize = 3000;
-/// Between two rounds of the background review; after an error of the model, longer.
-const REVIEW_PAUSE: Duration = Duration::from_secs(20);
-const REVIEW_BACKOFF: Duration = Duration::from_secs(600);
 
 struct App {
     db: Mutex<Connection>,
-    /// For /translate, in order of preference: none, no translations.
-    translators: gw2it_translate::Chain,
-    /// Signs the translations /translate makes (sign.rs).
+    /// Checks the translations the old /translate made and signed (sign.rs).
     secret: Vec<u8>,
     /// key -> (start of the current minute, requests in it)
     rate: Mutex<HashMap<String, (Instant, u32)>>,
@@ -99,8 +81,8 @@ struct App {
     frozen: bool,
 }
 
-/// How long the names read from the database are used before reading them again (the nightly
-/// job adds new ones).
+/// How long the names read from the database are used before reading them again (someone may
+/// add new ones).
 const NAMES_FRESH: Duration = Duration::from_secs(600);
 
 struct HttpError(u16, &'static str);
@@ -112,49 +94,42 @@ impl From<rusqlite::Error> for HttpError {
     }
 }
 
-const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790]
-                    [--translators translators.json] [--frozen]
-       gw2it-server consistency [--db gw2it.db] --translators translators.json [--max-groups 15] [--dry-run] [--include-manual]
-       gw2it-server names [--db gw2it.db] [--fetch] [--translators translators.json] [--max-texts N] [--dry-run]
-       gw2it-server review [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
-       gw2it-server plurals [--db gw2it.db] --translators translators.json [--max-texts 200] [--dry-run]
-       gw2it-server review|plurals [--db gw2it.db] (--ask-to <file> | --answers <file>) [--max-texts 200] [--dry-run]
-       gw2it-server import-glossary --file glossary_it.json [--excluded glossary-import-excluded.json] [--db gw2it.db] [--dry-run]
+const USAGE: &str = "usage: gw2it-server [--db gw2it.db] [--listen 127.0.0.1:8790] [--frozen]
        gw2it-server repair [--db gw2it.db] [--dry-run]
-       gw2it-server bulk [--db gw2it.db] --file texts.jsonl (--translators translators.json | --ask-to <file> | --answers <file>) [--max-texts N] [--all] [--dry-run]
-       gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--translators translators.json | --ask-to <file> | --answers <file>] [--max-texts 2000] [--from-last] [--dry-run]
+       gw2it-server bulk [--db gw2it.db] --file texts.jsonl (--ask-to <file> | --answers <file>) [--max-texts N] [--all] [--dry-run]
+       gw2it-server lt-sync [--db gw2it.db] --glossary <file or URL> [--ask-to <file> | --answers <file>] [--max-texts 2000] [--from-last] [--dry-run]
        gw2it-server gw2dat --dat Gw2.dat --seeds seeds.db --out gw2dat_en.db [--db gw2it.db] [--file map_it.db]
        gw2it-server seeds --out seeds.db
        gw2it-server full --names names_it.toml --terms terms.toml [--ask-to <file> | --answers <file>] [--max-texts 200] [--all] [--dry-run]";
 
+/// What the commands of the old machine-translation pipeline say now.
+const REMOVED: &str = "removed on 2026-11-20 with the machine translators (the agents translate now)";
+
 fn main() {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let consistency = args.first().is_some_and(|a| a == "consistency");
-    let english_names = args.first().is_some_and(|a| a == "names");
-    let review = args.first().is_some_and(|a| a == "review");
-    let plurals = args.first().is_some_and(|a| a == "plurals");
-    let import = args.first().is_some_and(|a| a == "import-glossary");
+    if let Some(old) = args.first().filter(|a| ["consistency", "names", "review", "plurals", "import-glossary"].contains(&a.as_str())) {
+        eprintln!("gw2it-server {old}: {REMOVED}");
+        std::process::exit(2);
+    }
     let repair = args.first().is_some_and(|a| a == "repair");
     let bulk = args.first().is_some_and(|a| a == "bulk");
     let lt_sync = args.first().is_some_and(|a| a == "lt-sync");
     let gw2dat = args.first().is_some_and(|a| a == "gw2dat");
     let seeds = args.first().is_some_and(|a| a == "seeds");
     let full = args.first().is_some_and(|a| a == "full");
-    if consistency || english_names || review || plurals || import || repair || bulk || lt_sync || gw2dat || seeds || full {
+    if repair || bulk || lt_sync || gw2dat || seeds || full {
         args.remove(0);
     }
     let dry_run = args.iter().any(|a| a == "--dry-run");
-    let include_manual = args.iter().any(|a| a == "--include-manual");
-    let fetch = args.iter().any(|a| a == "--fetch");
     let from_last = args.iter().any(|a| a == "--from-last");
     let all = args.iter().any(|a| a == "--all");
     let frozen = args.iter().any(|a| a == "--frozen");
-    args.retain(|a| a != "--dry-run" && a != "--include-manual" && a != "--fetch" && a != "--from-last" && a != "--all" && a != "--frozen");
+    args.retain(|a| a != "--dry-run" && a != "--from-last" && a != "--all" && a != "--frozen");
     let mut options = HashMap::new();
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-groups" | "--max-texts" | "--review-daily" | "--file" | "--excluded" | "--ask-to" | "--answers" | "--glossary" | "--dat" | "--seeds" | "--out" | "--names" | "--terms"), Some(v)) => {
+            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-texts" | "--file" | "--ask-to" | "--answers" | "--glossary" | "--dat" | "--seeds" | "--out" | "--names" | "--terms"), Some(v)) => {
                 options.insert(name.to_owned(), v);
             }
             _ => {
@@ -232,20 +207,6 @@ fn main() {
         }
         return;
     }
-    if consistency {
-        let Some(file) = options.remove("--translators") else {
-            eprintln!("{USAGE}");
-            std::process::exit(2);
-        };
-        let max_groups = options.remove("--max-groups").and_then(|n| n.parse().ok()).unwrap_or(15);
-        run_consistency(&db, &file, max_groups, dry_run, include_manual);
-        return;
-    }
-    if english_names {
-        let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(usize::MAX);
-        run_names(&db, fetch, options.remove("--translators").as_deref(), max_texts, dry_run);
-        return;
-    }
     if repair {
         let con = open(&db).unwrap_or_else(|e| {
             eprintln!("cannot open {db}: {e}");
@@ -260,19 +221,26 @@ fn main() {
         }
         return;
     }
+    // The translators of translators.json are no more: the commands that took them say so.
+    if (bulk || lt_sync) && options.contains_key("--translators") {
+        eprintln!("--translators: {REMOVED}; use --ask-to or --answers");
+        std::process::exit(2);
+    }
     if bulk {
         let by_hand = match (options.remove("--ask-to"), options.remove("--answers")) {
-            (Some(f), None) => Some(bulk::ByHand::AskTo(f)),
-            (None, Some(f)) => Some(bulk::ByHand::Answers(f)),
-            _ => None,
+            (Some(f), None) => bulk::ByHand::AskTo(f),
+            (None, Some(f)) => bulk::ByHand::Answers(f),
+            _ => {
+                eprintln!("{USAGE}");
+                std::process::exit(2);
+            }
         };
-        let translators_file = options.remove("--translators");
-        let Some(file) = options.remove("--file").filter(|_| by_hand.is_some() || translators_file.is_some()) else {
+        let Some(file) = options.remove("--file") else {
             eprintln!("{USAGE}");
             std::process::exit(2);
         };
         let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(usize::MAX);
-        run_bulk(&db, &file, translators_file.as_deref(), max_texts, dry_run, all, by_hand);
+        run_bulk(&db, &file, &bulk::Options { max_texts, dry_run, all, by_hand });
         return;
     }
     if lt_sync {
@@ -281,39 +249,15 @@ fn main() {
             std::process::exit(2);
         };
         let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(lt_sync::MAX_TEXTS);
-        // The model of translators.json or the answers by hand; with neither, only what needs no model.
-        let ask = ["--translators", "--ask-to", "--answers"].iter().any(|o| options.contains_key(*o)).then(|| model(&mut options));
+        // The answers by hand; without, only what needs no model.
+        let ask = ["--ask-to", "--answers"].iter().any(|o| options.contains_key(*o)).then(|| model(&mut options));
         lt_sync::command(&db, &glossary, ask.as_deref(), &lt_sync::Options { dry_run, max_texts, from_last });
         return;
     }
-    if import {
-        let Some(file) = options.remove("--file") else {
-            eprintln!("{USAGE}");
-            std::process::exit(2);
-        };
-        run_import_glossary(&db, &file, options.remove("--excluded").as_deref(), dry_run);
-        return;
-    }
-    if plurals {
-        let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(200);
-        run_plurals(&db, &*model(&mut options), max_texts, dry_run);
-        return;
-    }
-    if review {
-        let max_texts = options.remove("--max-texts").and_then(|n| n.parse().ok()).unwrap_or(200);
-        run_review(&db, &*model(&mut options), max_texts, dry_run);
-        return;
-    }
     let listen = options.remove("--listen").unwrap_or_else(|| "127.0.0.1:8790".into());
-    let translators_file = options.remove("--translators");
-    let engines = translators_file.as_deref().map(translators).unwrap_or_default();
-    let review_daily = options.remove("--review-daily").and_then(|n| n.parse().ok()).unwrap_or(REVIEW_DAILY);
-    // Its own pauses: a model out of quota for the review is not paused for /translate.
-    let mut reviewers = Chain::default();
-    reviewers.set(engines.clone());
-    let names: Vec<String> = engines.iter().map(Engine::name).collect();
-    let mut translators = Chain::default();
-    translators.set(engines);
+    if options.remove("--translators").is_some() {
+        eprintln!("gw2it-server: --translators ignored: {REMOVED}");
+    }
 
     let con = open(&db).unwrap_or_else(|e| {
         eprintln!("cannot open {db}: {e}");
@@ -323,7 +267,7 @@ fn main() {
         eprintln!("cannot listen on {listen}: {e}");
         std::process::exit(1);
     }));
-    eprintln!("gw2it-server: {db} on http://{listen}, translators: {}", if names.is_empty() { "none".into() } else { names.join(", ") });
+    eprintln!("gw2it-server: {db} on http://{listen}");
 
     let secret = sign::secret(&con).unwrap_or_else(|e| {
         eprintln!("cannot read the signing secret: {e}");
@@ -334,7 +278,7 @@ fn main() {
     if frozen {
         eprintln!("gw2it-server: frozen, the rows and terms the addons send are not written, no /translate");
     }
-    let app = Arc::new(App { db: Mutex::new(con), translators, secret, rate: Mutex::new(HashMap::new()), names: Mutex::new(None), frozen });
+    let app = Arc::new(App { db: Mutex::new(con), secret, rate: Mutex::new(HashMap::new()), names: Mutex::new(None), frozen });
     let workers: Vec<_> = (0..THREADS)
         .map(|_| {
             let (server, app) = (server.clone(), app.clone());
@@ -345,93 +289,8 @@ fn main() {
             })
         })
         .collect();
-    if review_daily > 0 && !reviewers.is_empty() && !app.frozen {
-        let app = app.clone();
-        thread::spawn(move || review_in_background(&app, &reviewers, review_daily));
-    }
     for w in workers {
         let _ = w.join();
-    }
-}
-
-/// The nightly consistency job (consistency.rs): the language models of translators.json settle the
-/// English words that the translations render in more than one way.
-fn run_consistency(db: &str, translators_file: &str, max_groups: usize, dry_run: bool, include_manual: bool) {
-    let mut chain = Chain::default();
-    chain.set(translators(translators_file));
-    let con = open(db).unwrap_or_else(|e| {
-        eprintln!("cannot open {db}: {e}");
-        std::process::exit(1);
-    });
-    let ask = |system: &str, user: &str| {
-        chain.ask(system, user).map_err(|e| match e {
-            gw2it_translate::Error::BadRequest(why) => consistency::Failure::Unusable(why),
-            e => consistency::Failure::Stop(e.to_string()),
-        })
-    };
-    match consistency::run(&con, &ask, &consistency::Options { max_groups, dry_run, include_manual }) {
-        Ok(report) => {
-            println!(
-                "consistency: {} groups, {} words classified ({} names), {} looked at, {} consistent, {} texts rewritten, {} terms{}{}",
-                report.groups,
-                report.classified,
-                report.names,
-                report.checked,
-                report.consistent,
-                report.rewritten,
-                report.terms,
-                if dry_run { " (dry run: nothing changed)" } else { "" },
-                report.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),
-            );
-        }
-        Err(e) => {
-            eprintln!("consistency: database: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-/// How long the jobs run by cron wait in a row for busy language models (HTTP 503...) before
-/// they stop: they go on until their texts are done or the quota is used up.
-const PATIENCE: Duration = Duration::from_secs(2 * 3600);
-
-/// The names that stay in English (names.rs): the official API's list with `fetch`, then the
-/// machine translations that lost one, fixed (by the language models of translators.json, if
-/// given; without, only the texts that are the name).
-fn run_names(db: &str, fetch: bool, translators_file: Option<&str>, max_texts: usize, dry_run: bool) {
-    let con = open(db).unwrap_or_else(|e| {
-        eprintln!("cannot open {db}: {e}");
-        std::process::exit(1);
-    });
-    if fetch {
-        match names::fetch(&con) {
-            Ok(added) => println!("names: {added} new from the API"),
-            Err(e) => {
-                eprintln!("names: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
-    let mut chain = Chain::default();
-    chain.set(translators_file.map(translators).unwrap_or_default());
-    let ask = |system: &str, user: &str| chain.ask_patiently(system, user, PATIENCE).map_err(|e| e.to_string());
-    let ask: Option<&names::Ask> = if chain.is_empty() { None } else { Some(&ask) };
-    match names::run(&con, ask, &names::Options { dry_run, max_texts }) {
-        Ok(r) => println!(
-            "names: {} texts that are a name, {} with one inside, {} rewritten, {} failed, {} not the mechanic, {} hand corrections without their name{}{}",
-            r.whole,
-            r.inside,
-            r.rewritten,
-            r.failed,
-            r.skipped,
-            r.manual,
-            if dry_run { " (dry run: nothing changed)" } else { "" },
-            r.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),
-        ),
-        Err(e) => {
-            eprintln!("names: database: {e}");
-            std::process::exit(1);
-        }
     }
 }
 
@@ -474,24 +333,11 @@ fn run_repair(con: &Connection, dry_run: bool) -> rusqlite::Result<usize> {
     Ok(repaired)
 }
 
-/// The model of the review and of the plurals check: the translators' chain, or answers by hand
-/// (byhand.rs) with --ask-to or --answers.
+/// The model of lt-sync answered by hand (byhand.rs), with --ask-to or --answers.
 fn model(options: &mut HashMap<String, String>) -> Box<names::Ask<'static>> {
-    let made = match (options.remove("--ask-to"), options.remove("--answers"), options.remove("--translators")) {
-        (Some(file), None, _) => byhand::ask_to(&file),
-        (None, Some(file), _) => byhand::answers(&file),
-        (None, None, Some(file)) => {
-            let mut chain = Chain::default();
-            chain.set(translators(&file));
-            // Never by hand: a model cannot skip the checks.
-            return Box::new(move |system: &str, user: &str| {
-                let mut answer = chain.ask_patiently(system, user, PATIENCE).map_err(|e| e.to_string())?;
-                if let Some(o) = answer.as_object_mut() {
-                    o.remove(byhand::FLAG);
-                }
-                Ok(answer)
-            });
-        }
+    let made = match (options.remove("--ask-to"), options.remove("--answers")) {
+        (Some(file), None) => byhand::ask_to(&file),
+        (None, Some(file)) => byhand::answers(&file),
         _ => {
             eprintln!("{USAGE}");
             std::process::exit(2);
@@ -503,89 +349,15 @@ fn model(options: &mut HashMap<String, String>) -> Box<names::Ask<'static>> {
     })
 }
 
-/// The review (review.rs) by hand: up to `max_texts` texts not reviewed yet, the newest first.
-fn run_review(db: &str, ask: &names::Ask, max_texts: usize, dry_run: bool) {
+/// The texts of a file translated ahead by the agents (bulk.rs).
+fn run_bulk(db: &str, file: &str, options: &bulk::Options) {
     let con = open(db).unwrap_or_else(|e| {
         eprintln!("cannot open {db}: {e}");
         std::process::exit(1);
     });
-    match review::run(&con, ask, max_texts, dry_run) {
+    match bulk::run(&con, file, options) {
         Ok(r) => println!(
-            "review: {} texts, {} right, {} fixed ({} rows), {} fixes refused{}{}",
-            r.asked,
-            r.ok,
-            r.fixed,
-            r.rows,
-            r.refused,
-            if dry_run { " (dry run: nothing changed)" } else { "" },
-            r.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),
-        ),
-        Err(e) => {
-            eprintln!("review: database: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-/// The Local Translator module's glossary into ours (glossary_import.rs): a summary, the terms left out with their reasons, and with
-/// no `--dry-run` the names and the terms written.
-fn run_import_glossary(db: &str, file: &str, excluded_file: Option<&str>, dry_run: bool) {
-    let read = |path: &str| -> Value {
-        let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
-            eprintln!("cannot read {path}: {e}");
-            std::process::exit(1);
-        });
-        serde_json::from_str(&text).unwrap_or_else(|e| {
-            eprintln!("{path}: {e}");
-            std::process::exit(1);
-        })
-    };
-    let glossary = read(file);
-    let excluded = excluded_file.map(|f| glossary_import::excluded(&read(f))).unwrap_or_default();
-    let plan = glossary_import::plan(&glossary, &excluded);
-    for (term, why) in &plan.left_out {
-        println!("left out: {term:?}: {why}");
-    }
-    for (term, it, why) in &plan.unsupported {
-        println!("not supported: {term:?} -> {it:?}: {why}");
-    }
-    println!(
-        "import-glossary: {} names to keep in English, {} words with an Italian form, {} left out, {} not supported",
-        plan.keep.len(),
-        plan.translated.len(),
-        plan.left_out.len(),
-        plan.unsupported.len()
-    );
-    if dry_run {
-        println!("(dry run: nothing changed)");
-        return;
-    }
-    let con = open(db).unwrap_or_else(|e| {
-        eprintln!("cannot open {db}: {e}");
-        std::process::exit(1);
-    });
-    match glossary_import::apply(&con, &plan) {
-        Ok((names, terms)) => println!("import-glossary: {names} names added, {terms} glossary terms changed"),
-        Err(e) => {
-            eprintln!("import-glossary: database: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-/// The texts of a file translated ahead (bulk.rs), with the language models first.
-fn run_bulk(db: &str, file: &str, translators_file: Option<&str>, max_texts: usize, dry_run: bool, all: bool, by_hand: Option<bulk::ByHand>) {
-    let con = open(db).unwrap_or_else(|e| {
-        eprintln!("cannot open {db}: {e}");
-        std::process::exit(1);
-    });
-    let mut chain = Chain::default();
-    if let Some(f) = translators_file {
-        chain.set(bulk::order(translators(f)));
-    }
-    match bulk::run(&con, &chain, file, &bulk::Options { max_texts, dry_run, all, by_hand }) {
-        Ok(r) => println!(
-            "bulk: {} texts, {} known, {} with new English, {} names, {} copied, {} with nothing to translate, {} translated, {} rejected{}{}",
+            "bulk: {} texts, {} known, {} with new English, {} names, {} copied, {} with nothing to translate, {} translated, {} rejected{}",
             r.read,
             r.known,
             r.changed,
@@ -594,106 +366,13 @@ fn run_bulk(db: &str, file: &str, translators_file: Option<&str>, max_texts: usi
             r.nothing,
             r.translated,
             r.rejected,
-            if dry_run { " (dry run: nothing changed)" } else { "" },
-            r.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),
+            if options.dry_run { " (dry run: nothing changed)" } else { "" },
         ),
         Err(e) => {
             eprintln!("bulk: {e}");
             std::process::exit(1);
         }
     }
-}
-
-/// The plurals check (plurals.rs) by hand or from cron: up to `max_texts` texts not checked yet.
-fn run_plurals(db: &str, ask: &names::Ask, max_texts: usize, dry_run: bool) {
-    let con = open(db).unwrap_or_else(|e| {
-        eprintln!("cannot open {db}: {e}");
-        std::process::exit(1);
-    });
-    match plurals::run(&con, ask, max_texts, dry_run) {
-        Ok(r) => println!(
-            "plurals: {} texts, {} right, {} fixed ({} rows), {} fixes refused{}{}",
-            r.asked,
-            r.ok,
-            r.fixed,
-            r.rows,
-            r.refused,
-            if dry_run { " (dry run: nothing changed)" } else { "" },
-            r.stopped.map(|why| format!("; stopped: {why}")).unwrap_or_default(),
-        ),
-        Err(e) => {
-            eprintln!("plurals: database: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-/// The review in the server: the texts that arrive, a batch every REVIEW_PAUSE, up to `daily`
-/// a day; the database is not held while the model thinks.
-fn review_in_background(app: &App, chain: &Chain, daily: usize) {
-    let ask = |system: &str, user: &str| chain.ask(system, user).map_err(|e| e.to_string());
-    loop {
-        thread::sleep(REVIEW_PAUSE);
-        let todo = {
-            let db = app.db.lock().unwrap();
-            let left = review::used_today(&db).map(|used| daily.saturating_sub(used));
-            match left.and_then(|left| Ok((review::pending(&db, review::BATCH.min(left))?, english_names(app, &db)?, glossary::all(&db)?))) {
-                Ok(todo) => todo,
-                Err(e) => {
-                    eprintln!("review: database: {e}");
-                    continue;
-                }
-            }
-        };
-        let (texts, names, terms) = todo;
-        if texts.is_empty() {
-            continue;
-        }
-        let verdicts = match review::ask(&ask, &names, &terms, &texts) {
-            Ok(v) => v,
-            Err(why) => {
-                eprintln!("review: {why}; again in {} s", REVIEW_BACKOFF.as_secs());
-                thread::sleep(REVIEW_BACKOFF);
-                continue;
-            }
-        };
-        let db = app.db.lock().unwrap();
-        let written = review::count(&db, texts.len()).and_then(|()| {
-            let mut fixed = 0;
-            for (text, verdict) in texts.iter().zip(&verdicts) {
-                match verdict {
-                    Some(verdict @ review::Verdict::Fixed { it, why, .. }) => {
-                        eprintln!("review: {:?} -> {:?} ({why})", text.it, it);
-                        fixed += review::apply(&db, text, verdict)?;
-                    }
-                    Some(verdict) => {
-                        review::apply(&db, text, verdict)?;
-                    }
-                    None => {}
-                }
-            }
-            Ok(fixed)
-        });
-        if let Err(e) = written {
-            eprintln!("review: database: {e}");
-        }
-    }
-}
-
-/// translators.json: the translators of /translate in order of preference, with their keys
-/// (Engine::from_json in gw2it-translate). Readable by this user only.
-fn translators(file: &str) -> Vec<Engine> {
-    let fail = |e: String| -> ! {
-        eprintln!("{file}: {e}");
-        std::process::exit(1);
-    };
-    let text = std::fs::read_to_string(file).unwrap_or_else(|e| fail(e.to_string()));
-    let list: Value = serde_json::from_str(&text).unwrap_or_else(|e| fail(e.to_string()));
-    let mut engines = Vec::new();
-    for entry in list.as_array().unwrap_or_else(|| fail("not a JSON array".into())) {
-        engines.extend(Engine::from_json(entry).unwrap_or_else(|e| fail(e)));
-    }
-    engines
 }
 
 fn open(path: &str) -> rusqlite::Result<Connection> {
@@ -716,11 +395,8 @@ fn open(path: &str) -> rusqlite::Result<Connection> {
              UPDATE translations SET trust = 2 WHERE status = 'manual';",
         )?;
     }
-    con.execute_batch(translate::SCHEMA)?;
-    con.execute_batch(consistency::SCHEMA)?;
+    con.execute_batch(SQL_OLD_JOBS)?;
     con.execute_batch(names::SCHEMA)?;
-    con.execute_batch(review::SCHEMA)?;
-    con.execute_batch(plurals::SCHEMA)?;
     Ok(con)
 }
 
@@ -731,7 +407,8 @@ fn handle(app: &App, mut request: Request) {
     let result = match (&method, path.as_str()) {
         (Method::Post, "/register") => register(app, &mut request),
         (Method::Post, "/sync") => sync(app, &mut request),
-        (Method::Post, "/translate") => translate::handle(app, &mut request),
+        // The addons before 0.4.3 still ask: the answer they got from a server without translators.
+        (Method::Post, "/translate") => Err(HttpError(503, "no translations on this server")),
         (Method::Get, "/") => Ok(json!({ "service": "gw2it-sync" })),
         _ => Err(HttpError(404, "not found")),
     };
@@ -828,7 +505,7 @@ fn register(app: &App, request: &mut Request) -> Result<Value, HttpError> {
     Ok(json!({ "token": token }))
 }
 
-/// A row sent by the addon: [id, hash, en, it, status], and for a text made by this server's
+/// A row sent by the addon: [id, hash, en, it, status], and for a text made by this server's old
 /// /translate [.., signature, the XML it answered] (sign.rs). None if malformed. Its proof is not
 /// checked here.
 fn valid(row: &Value) -> Option<(Value, Option<(String, String)>)> {
@@ -920,8 +597,7 @@ fn sync(app: &App, request: &mut Request) -> Result<Value, HttpError> {
         // A `%` a translator added cuts the text in the game: repaired in every row.
         let repaired = gw2it_text::markup::repair(row[2].as_str().unwrap_or(""), row[3].as_str().unwrap_or(""));
         row[3] = repaired.into();
-        // The glossary's fixes (the contributors' terms, the consistency job's), at once; the
-        // language model's review follows in the background (review.rs).
+        // The glossary's fixes (the contributors' terms, the old consistency job's), at once.
         if trust <= 1 {
             let fixed = gw2it_text::glossary::fix(row[2].as_str().unwrap_or(""), row[3].as_str().unwrap_or(""), &terms);
             row[3] = fixed.into();

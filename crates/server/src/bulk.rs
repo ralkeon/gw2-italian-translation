@@ -1,42 +1,31 @@
-//! gw2it-server bulk --file texts.jsonl|map_it.db --translators translators.json [--max-texts N] [--dry-run]
+//! gw2it-server bulk --file texts.jsonl|map_it.db (--ask-to <file> | --answers <file>) [--all] [--max-texts N] [--dry-run]
 //!
-//! Texts nobody has seen in the game yet, translated ahead: one `[id, hash, en]` per line, `hash`
-//! the XXH3-64 of the English in UTF-8 as the game gives it. They go the same way as in the addon
-//! (crates/addon/src/translate.rs): a name that stays in English is the name, the same English
-//! under another ID is copied, the rest is translated in batches of neighbouring IDs (the same
-//! tooltip, the same dialogue: context for each other), the markup put back, the glossary's and
-//! the plural marks' fixes. They are written as machine translations made by this server (trust
-//! 1, author `bulk`): a player's machine translation does not replace them, a hand correction
-//! does; the review, the names and the plurals jobs take them like any other row.
-//!
-//! The language models come first here: they follow the project's rules (LLM_INSTRUCTIONS) and the
-//! glossary, and the players' /translate keeps DeepL's quota. Stopped and started again, it goes
-//! on from the texts not written yet.
+//! Texts nobody has seen in the game yet, translated ahead by the agents: one `[id, hash, en]` per
+//! line, `hash` the XXH3-64 of the English in UTF-8 as the game gives it. A name that stays in
+//! English is the name, the same English under another ID is copied, the rest goes to the agent
+//! (`ByHand`) with its neighbouring IDs (the same tooltip, the same dialogue: context for each
+//! other); its answers get the markup put back and the glossary's and the plural marks' fixes.
+//! Stopped and started again, it goes on from the texts not written yet.
 
-use std::{collections::HashSet, time::Duration};
+use std::collections::HashSet;
 
 use gw2it_text::{glossary, markup, plural};
-use gw2it_translate::{Chain, Engine, Error};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
 use crate::{SQL_UPSERT, names, now_ms};
 
-const BATCH: usize = 50;
-const NEIGHBOURS_MAX: usize = 3000;
-/// Waiting in a row for translators that are all paused or busy, before stopping.
-const PATIENCE: Duration = Duration::from_secs(2 * 3600);
-const WAIT: Duration = Duration::from_secs(60);
+/// The author of the rows answered by hand.
+const BY_HAND: &str = "byhand";
 
 pub struct Options {
     pub max_texts: usize,
     pub dry_run: bool,
-    /// Every text goes to the translators (or the agent): no name written at once, no copy of the
-    /// same English, the same English twice asked twice. For a translation made from scratch (the
-    /// agents' pilot: a database of its own, nothing it holds trusted).
+    /// Every text goes to the agent: no name written at once, no copy of the same English, the
+    /// same English twice asked twice. For a translation made from scratch (the agents' pilot: a
+    /// database of its own, nothing it holds trusted).
     pub all: bool,
-    /// Translated by hand instead of by the translators (see `ByHand`).
-    pub by_hand: Option<ByHand>,
+    pub by_hand: ByHand,
 }
 
 /// The translations given by hand (the translator agent, Claude Code on a subscription):
@@ -46,10 +35,9 @@ pub struct Options {
 /// to understand it (the game's fr/es/de, the Local Translator's Italian, GW1 names: refs.rs)};
 /// nothing is written to the database.
 /// `Answers(file)`: the same lines with "answer": the Italian of "src", tags kept. Each answer goes
-/// through what a translator's answer goes through (markup put back and checked, the glossary's fix,
-/// the plural marks) and is written as `byhand`: above the review and the names job (priority.rs),
-/// which take a person's judgment as final; the agents may still correct it. A text with no answer
-/// stays for later.
+/// through the checks (markup put back and checked, the glossary's fix, the plural marks) and is
+/// written as `byhand` (trust 1); the names and the copies of the same English as `bulk`. A text
+/// with no answer stays for later.
 pub enum ByHand {
     AskTo(String),
     Answers(String),
@@ -66,16 +54,8 @@ pub struct Report {
     pub copied: usize,
     pub nothing: usize,
     pub translated: usize,
-    /// Markup broken by every translator: left to the addon, which shows the English.
+    /// Answers whose markup came back broken: left for later.
     pub rejected: usize,
-    pub stopped: Option<String>,
-}
-
-/// The language models first, then the machine translators.
-pub fn order(engines: Vec<Engine>) -> Vec<Engine> {
-    let (machines, models): (Vec<_>, Vec<_>) =
-        engines.into_iter().partition(|e| matches!(e, Engine::Deepl { .. } | Engine::Azure { .. } | Engine::Server { .. }));
-    models.into_iter().chain(machines).collect()
 }
 
 struct Text {
@@ -182,7 +162,7 @@ fn read_answers(file: &str) -> Result<std::collections::HashMap<String, String>,
     Ok(out)
 }
 
-pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Result<Report, String> {
+pub fn run(con: &Connection, file: &str, options: &Options) -> Result<Report, String> {
     let db = |e: rusqlite::Error| format!("database: {e}");
     let texts = read(file)?;
     let mut report = Report { read: texts.len(), ..Report::default() };
@@ -237,7 +217,7 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
             None => report.nothing += 1,
         }
     }
-    let asking = matches!(options.by_hand, Some(ByHand::AskTo(_)));
+    let asking = matches!(options.by_hand, ByHand::AskTo(_));
     write(con, &quick, options.dry_run || asking).map_err(db)?;
     println!(
         "bulk: {} texts, {} known, {} with new English, {} names, {} copied, {} with nothing to translate, {} to translate",
@@ -251,7 +231,7 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
     );
 
     match &options.by_hand {
-        Some(ByHand::AskTo(file)) => {
+        ByHand::AskTo(file) => {
             use std::io::Write;
             let mut out = std::fs::OpenOptions::new().create(true).append(true).open(file).map_err(|e| format!("{file}: {e}"))?;
             let refs = crate::refs::Refs::open(con.path(), true);
@@ -265,9 +245,9 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
                 writeln!(out, "{line}").map_err(|e| format!("{file}: {e}"))?;
             }
             println!("bulk: {} texts to translate by hand written to {file}", todo.len());
-            return Ok(report);
+            Ok(report)
         }
-        Some(ByHand::Answers(file)) => {
+        ByHand::Answers(file) => {
             let answers = read_answers(file)?;
             let mut rows = Vec::new();
             for (text, prepared) in &todo {
@@ -284,96 +264,15 @@ pub fn run(con: &Connection, chain: &Chain, file: &str, options: &Options) -> Re
                 }
             }
             report.translated = rows.len();
-            write_as(con, &rows, options.dry_run, crate::priority::BY_HAND).map_err(db)?;
+            write_as(con, &rows, options.dry_run, BY_HAND).map_err(db)?;
             if options.dry_run {
                 for (text, it) in &rows {
                     println!("bulk: {} {:?} -> {:?}", text.id, text.en, it);
                 }
             }
-            return Ok(report);
-        }
-        None => {}
-    }
-
-    let mut waited = Duration::ZERO;
-    let mut start = 0;
-    while start < todo.len() {
-        let batch = &todo[start..(start + BATCH).min(todo.len())];
-        let xml: Vec<&str> = batch.iter().map(|(_, p)| p.xml.as_str()).collect();
-        let mut neighbours = String::new();
-        for x in &xml {
-            if neighbours.len() + x.len() > NEIGHBOURS_MAX {
-                break;
-            }
-            neighbours.push_str(x);
-            neighbours.push('\n');
-        }
-        let mut translated = match chain.translate(&xml, &neighbours, &terms) {
-            Ok(t) => t,
-            Err(Error::BadRequest(why)) => {
-                eprintln!("bulk: {} texts from id {} refused by every translator: {why}", batch.len(), batch[0].0.id);
-                report.rejected += batch.len();
-                start += batch.len();
-                continue;
-            }
-            Err(e) => {
-                if waited + WAIT > PATIENCE {
-                    report.stopped = Some(e.to_string());
-                    break;
-                }
-                eprintln!("bulk: {e}; again in {}s", WAIT.as_secs());
-                std::thread::sleep(WAIT);
-                waited += WAIT;
-                continue;
-            }
-        };
-        waited = Duration::ZERO;
-        // The texts whose markup came back broken go to the next translators, as in the addon.
-        let mut pending: Vec<usize> = (0..batch.len()).collect();
-        let mut skip = Vec::new();
-        let mut rows = Vec::new();
-        loop {
-            skip.push(translated.slot);
-            let mut still = Vec::new();
-            for (&i, answer) in pending.iter().zip(&translated.texts) {
-                let (text, prepared) = &batch[i];
-                match prepared.restore(answer).and_then(|it| markup::finish(&text.en, &it)) {
-                    Some(it) => {
-                        let it = glossary::fix(&text.en, &it, &terms);
-                        rows.push((*text, plural::pluralize(&text.en, &it)));
-                    }
-                    None => still.push(i),
-                }
-            }
-            if still.is_empty() {
-                break;
-            }
-            pending = still;
-            let xml: Vec<&str> = pending.iter().map(|&i| batch[i].1.xml.as_str()).collect();
-            match chain.translate_without(&skip, &xml, &neighbours, &terms) {
-                Ok(next) => translated = next,
-                Err(_) => {
-                    for &i in &pending {
-                        eprintln!("bulk: {} rejected (markup changed): {:?}", batch[i].0.id, batch[i].0.en);
-                    }
-                    report.rejected += pending.len();
-                    break;
-                }
-            }
-        }
-        report.translated += rows.len();
-        write(con, &rows, options.dry_run).map_err(db)?;
-        if options.dry_run {
-            for (text, it) in &rows {
-                println!("bulk: {} {:?} -> {:?}", text.id, text.en, it);
-            }
-        }
-        start += batch.len();
-        if start % 1000 < BATCH {
-            println!("bulk: {start}/{} translated by {} so far", todo.len(), translated.by);
+            Ok(report)
         }
     }
-    Ok(report)
 }
 
 #[cfg(test)]
