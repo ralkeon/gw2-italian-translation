@@ -7,8 +7,8 @@
 //!              [--frozen]   (the database as it is: /sync gives everything but takes no rows or terms;
 //!                            also when the file <db>.frozen exists)
 //!              (/translate answers 503 "no translations on this server": the machine translators were
-//!              removed on 2026-11-20; `--translators <file>` is still accepted and ignored, for the
-//!              service's command line)
+//!              removed on 2026-11-20; `--translators <file>` and `--review-daily <n>` are still
+//!              accepted and ignored, for the service's command line)
 //! gw2it-server repair [--db gw2it.db] [--dry-run]   (the `%` a translator added, in every row)
 //! gw2it-server bulk [--db gw2it.db] --file texts.jsonl (--ask-to <file> | --answers <file>) [--max-texts N] [--all] [--dry-run]
 //!                                                                         (see bulk.rs)
@@ -129,7 +129,7 @@ fn main() {
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match (arg.as_str(), args.next()) {
-            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--max-texts" | "--file" | "--ask-to" | "--answers" | "--glossary" | "--dat" | "--seeds" | "--out" | "--names" | "--terms"), Some(v)) => {
+            (name @ ("--db" | "--listen" | "--to" | "--key-file" | "--translators" | "--review-daily" | "--max-texts" | "--file" | "--ask-to" | "--answers" | "--glossary" | "--dat" | "--seeds" | "--out" | "--names" | "--terms"), Some(v)) => {
                 options.insert(name.to_owned(), v);
             }
             _ => {
@@ -255,8 +255,10 @@ fn main() {
         return;
     }
     let listen = options.remove("--listen").unwrap_or_else(|| "127.0.0.1:8790".into());
-    if options.remove("--translators").is_some() {
-        eprintln!("gw2it-server: --translators ignored: {REMOVED}");
+    for old in ["--translators", "--review-daily"] {
+        if options.remove(old).is_some() {
+            eprintln!("gw2it-server: {old} ignored: {REMOVED}");
+        }
     }
 
     let con = open(&db).unwrap_or_else(|e| {
