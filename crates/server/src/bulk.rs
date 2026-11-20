@@ -255,7 +255,14 @@ pub fn run(con: &Connection, file: &str, options: &Options) -> Result<Report, St
                 let Some(answer) = answers.get(&text.hash) else { continue };
                 match prepared.restore(answer).and_then(|it| markup::finish(&text.en, &it)) {
                     Some(it) => {
-                        rows.push((*text, glossary::fix(&text.en, &it, &terms)));
+                        let it = glossary::fix(&text.en, &it, &terms);
+                        // The addon would drop it anyway ("plural marks broken" in store.rs).
+                        if !markup::marks_ok(&it) {
+                            eprintln!("bulk: {} rejected (plural or gender marks broken): {:?}", text.id, it);
+                            report.rejected += 1;
+                            continue;
+                        }
+                        rows.push((*text, it));
                     }
                     None => {
                         eprintln!("bulk: {} rejected (markup changed): {:?} -> {:?}", text.id, text.en, answer);

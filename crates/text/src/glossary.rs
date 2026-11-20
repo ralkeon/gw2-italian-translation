@@ -1,15 +1,9 @@
-//! Glossary of terms that a hand correction fixed: "Seraph" is "Serafini", not "Serafi".
+//! Glossary of terms: "Seraph" is "Serafini", not "Serafi".
 //!
-//! A term is learned from a correction (`learn`): the words that changed between the translation
-//! that was there and the corrected one, tied to the English word they translate. From then on
-//! the translators are told the term (`relevant`, in the prompts of the language models) and what
-//! they still get wrong is repaired in their answer (`fix`), in the texts to come and in the ones
-//! already translated by a machine.
-//!
-//! Only proper-name-like words are learned (capitalised, at least four letters) that look like
-//! their Italian form: "Seraph" / "Serafini". The owner also writes terms by hand, a few words
-//! long too ("magic find" / "Ritrovamento magico"), for what the reviews decided. A term only
-//! acts on texts that contain its words, one after the other.
+//! The translators are told the terms of a text (`relevant`) and what they still get wrong is
+//! repaired in their answer (`fix`). The terms are written by hand, a few words long too
+//! ("magic find" / "Ritrovamento magico"), and synced with the global database (`merge`). A term
+//! only acts on texts that contain its words, one after the other.
 
 use std::collections::HashSet;
 
@@ -22,14 +16,6 @@ pub struct Term {
     pub it: String,
     /// What the translators wrote instead: replaced by `it` wherever it is found.
     pub wrong: Vec<String>,
-}
-
-/// The first correction of a word, to be added to the glossary.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Learned {
-    pub en: String,
-    pub it: String,
-    pub wrong: String,
 }
 
 fn same(a: &str, b: &str) -> bool {
@@ -134,60 +120,10 @@ pub(crate) fn lower(w: &Word) -> String {
     w.text.to_lowercase()
 }
 
-pub(crate) fn common_prefix(a: &str, b: &str) -> usize {
-    a.chars().zip(b.chars()).take_while(|(a, b)| a.to_lowercase().eq(b.to_lowercase())).count()
-}
-
-/// The longest run of changed words that is still a correction of a term, not a rewrite.
+/// The most words a term, or a form of it, has.
 const SPAN_MAX: usize = 3;
-/// Letters an English word and its Italian form share at the start.
+/// The fewest letters of the English of a term.
 pub(crate) const SHARED_MIN: usize = 4;
-
-/// Articles and prepositions that join a name to the rest of the sentence.
-pub(crate) const FUNCTION_WORDS: &[&str] = &[
-    "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "di", "del", "dello", "della", "dei", "degli", "delle",
-    "a", "al", "allo", "alla", "ai", "agli", "alle", "da", "dal", "dallo", "dalla", "dai", "dagli", "dalle", "in",
-    "nel", "nello", "nella", "nei", "negli", "nelle", "su", "sul", "sullo", "sulla", "sui", "sugli", "sulle", "e",
-    "ed", "o", "per", "con",
-];
-
-fn trim_function_words<'a, 'b>(words: &'b [Word<'a>]) -> &'b [Word<'a>] {
-    let is_function = |w: &Word| FUNCTION_WORDS.contains(&lower(w).as_str());
-    let start = words.iter().take_while(|w| is_function(w)).count();
-    let end = words.len() - words[start..].iter().rev().take_while(|w| is_function(w)).count();
-    &words[start..end]
-}
-
-/// The term a correction fixed: `old` was the Italian text, `new` the contributor's, `en` the
-/// English. None if the correction is not about one word that can be tied to the English (a
-/// rewrite, a word that is not a name, a translation that does not look like the English).
-pub fn learn(en: &str, old: &str, new: &str) -> Option<Learned> {
-    let (o, n) = (words(old), words(new));
-    let same = |a: &Word, b: &Word| lower(a) == lower(b);
-    let prefix = o.iter().zip(&n).take_while(|(a, b)| same(a, b)).count();
-    let suffix = o[prefix..].iter().rev().zip(n[prefix..].iter().rev()).take_while(|(a, b)| same(a, b)).count();
-    let (o, n) = (&o[prefix..o.len() - suffix], &n[prefix..n.len() - suffix]);
-    // "Soldato Serafino" -> "Soldato dei Serafini": the term is Serafini; the "dei" is the
-    // sentence's (and would be doubled by `fix`).
-    let (o, n) = (trim_function_words(o), trim_function_words(n));
-    if o.is_empty() || n.is_empty() || o.len() > SPAN_MAX || n.len() > SPAN_MAX {
-        return None;
-    }
-    let span = |s: &str, w: &[Word]| s[w[0].start..w[w.len() - 1].end].to_owned();
-    let (wrong, it) = (span(old, o), span(new, n));
-
-    let (_, english) = words(en)
-        .into_iter()
-        .filter(|w| w.text.chars().next().is_some_and(char::is_uppercase) && w.text.chars().count() >= SHARED_MIN)
-        .filter_map(|w| {
-            let shared = n.iter().map(|m| common_prefix(w.text, m.text)).max()?;
-            (shared >= SHARED_MIN).then_some((shared, w))
-        })
-        .max_by_key(|(shared, _)| *shared)?;
-    let learned = Learned { en: english.text.to_lowercase(), it, wrong };
-    // What the global database would refuse is not learned.
-    Term { en: learned.en.clone(), it: learned.it.clone(), wrong: vec![learned.wrong.clone()] }.is_valid().then_some(learned)
-}
 
 /// The lowercase words of English texts, and the singular of the ones in -s ("Seraphs").
 fn english(texts: &[&str]) -> HashSet<String> {
@@ -273,34 +209,14 @@ mod tests {
     }
 
     #[test]
-    fn learns_the_word_that_changed() {
-        let learned = learn("Seraph Guard", "Guardia dei Serafi", "Guardia dei Serafini").unwrap();
-        assert_eq!(learned, Learned { en: "seraph".into(), it: "Serafini".into(), wrong: "Serafi".into() });
-    }
-
-    #[test]
     fn the_sentences_own_words_are_not_the_term() {
-        // The same name, written three ways: the word is learned, not the "dei".
-        let learned = learn("Seraph soldier", "Soldato Serafino", "Soldato dei Serafini").unwrap();
-        assert_eq!(learned, Learned { en: "seraph".into(), it: "Serafini".into(), wrong: "Serafino".into() });
+        // The same name, written three ways: the "dei" is the sentence's, not doubled.
         let terms = [term("seraph", "Serafini", &["Serafi", "Serafino"])];
         for text in ["Soldato dei Serafini", "Soldato Serafino", "Guardia dei Serafi"] {
             let once = fix("Seraph soldier", text, &terms);
             assert!(once.ends_with("Serafini") && !once.contains("dei dei"), "{once}");
             assert_eq!(fix("Seraph soldier", &once, &terms), once);
         }
-    }
-
-    #[test]
-    fn does_not_learn_what_is_not_a_term() {
-        // A rewrite, an addition, a deletion, no English word it looks like, a lowercase one.
-        assert_eq!(learn("Seraph Guard", "Guardia dei Serafi", "La guardia scelta dalla Fiamma"), None);
-        assert_eq!(learn("Seraph Guard", "Guardia dei Serafi", "Guardia dei Serafi veri"), None);
-        assert_eq!(learn("Seraph Guard", "Guardia dei Serafi", "Guardia dei"), None);
-        assert_eq!(learn("Seraph Guard", "Guardia dei Serafi", "Guardia dei Angeli"), None);
-        assert_eq!(learn("seraph guard", "guardia dei serafi", "guardia dei serafini"), None);
-        // Nothing changed but the case.
-        assert_eq!(learn("Seraph Guard", "Guardia dei serafini", "Guardia dei Serafini"), None);
     }
 
     #[test]

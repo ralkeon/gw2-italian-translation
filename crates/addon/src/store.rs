@@ -70,19 +70,11 @@ pub(crate) const SCHEMA: &str = "
         hash   INTEGER NOT NULL,      -- hash of the English it translates: a new English is a new row
         it     TEXT    NOT NULL,
         status TEXT    NOT NULL,      -- 'auto' (machine), 'manual' (never overwritten)
-        source TEXT    NOT NULL,      -- 'deepl', 'gemini', 'server:<translator>', 'editor:<contributor>', 'external', 'cloud:<author>', 'copy' (same English, other ID)
+        source TEXT    NOT NULL,      -- 'cloud:<author>' (from the server), 'editor:<contributor>', 'external'; rows of earlier versions also 'deepl', 'gemini', 'server:<translator>', 'copy'
         at     INTEGER NOT NULL,      -- unix ms of the last change
         PRIMARY KEY (id, hash)
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS translations_at ON translations (at);
-    -- The server's proof of a translation it made (store::Translated), sent with it by sync.rs.
-    CREATE TABLE IF NOT EXISTS proofs (
-        id   INTEGER NOT NULL,
-        hash INTEGER NOT NULL,
-        sig  TEXT    NOT NULL,
-        raw  TEXT    NOT NULL,
-        PRIMARY KEY (id, hash)
-    ) WITHOUT ROWID;
     -- Terms a hand correction fixed (gw2it_text::glossary): one row per wrong form of a word.
     CREATE TABLE IF NOT EXISTS glossary (
         en    TEXT    NOT NULL,       -- English word, lowercase
